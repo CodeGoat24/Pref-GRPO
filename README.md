@@ -19,7 +19,7 @@ Hunyuan, Tencent & [UnifiedReward](https://github.com/CodeGoat24/UnifiedReward) 
 
 ## 🔥 News
 Please leave us a star ⭐ if you find this work helpful.
-- [2025/9] 🔥🔥 **GPT-4o**, **Imagen-4-Ultra**, **Nano Banana**, **Seedream-3.0**, **Qwen-Image**, **FLUX-Kontext-[Max/Pro]** are added to UniGenBench 🏅[Leaderboard](https://huggingface.co/spaces/CodeGoat24/UniGenBench_Leaderboard).
+- [2025/9] 🔥🔥 **GPT-4o**, **Imagen-4-Ultra**, **Nano Banana**, **Seedream-3.0**, **Qwen-Image**, **FLUX-Kontext-[Max/Pro]** are added to UniGenBench 🏅[Leaderboard(English)](https://huggingface.co/spaces/CodeGoat24/UniGenBench_Leaderboard) and 🏅[Leaderboard(Chinese)](https://huggingface.co/spaces/CodeGoat24/UniGenBench_Leaderboard_Chinese).
 - [2025/8] 🔥🔥 We release [Pref-GRPO](https://github.com/CodeGoat24/Pref-GRPO) and [UniGenBench](https://github.com/CodeGoat24/UniGenBench), and [Leaderboard](https://huggingface.co/spaces/CodeGoat24/UniGenBench_Leaderboard).
 
 
