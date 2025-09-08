@@ -28,7 +28,7 @@ class UniGenBenchDataset(Dataset):
     ):
         self.csv_path = csv_path
 
-        df = pd.read_csv(self.txt_path)
+        df = pd.read_csv(self.csv_path)
 
         self.dataset = df["prompt_en"].tolist()
         self.index_list = df["index"].tolist()
