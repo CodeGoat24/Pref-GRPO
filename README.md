@@ -10,17 +10,27 @@ Hunyuan, Tencent & [UnifiedReward](https://github.com/CodeGoat24/UnifiedReward) 
 
 <a href="https://codegoat24.github.io/UnifiedReward/Pref-GRPO">
 <img src='https://img.shields.io/badge/Project-Website-orange' alt='Project Page'></a>
+
+<a href="https://huggingface.co/CodeGoat24/FLUX.1-dev-PrefGRPO">
+<img src='https://img.shields.io/badge/Huggingface-Model-yellow' alt='Project Page'></a>
+
 <a href="https://github.com/CodeGoat24/UniGenBench">
 <img src='https://img.shields.io/badge/Benchmark-UniGenBench-green' alt='Project Page'></a>
 
-[![Hugging Face Spaces](https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-Model-yellow)](https://huggingface.co/CodeGoat24/FLUX.1-dev-PrefGRPO) [![Hugging Face Spaces](https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-Leaderboard-yellow)](https://huggingface.co/spaces/CodeGoat24/UniGenBench_Leaderboard)
 
+
+[![Hugging Face Spaces](https://img.shields.io/badge/%F0%9F%A4%97%20UniGenBench%20-Leaderboard_(English)-brown)](https://huggingface.co/spaces/CodeGoat24/UniGenBench_Leaderboard)
+[![Hugging Face Spaces](https://img.shields.io/badge/%F0%9F%A4%97%20UniGenBench%20-Leaderboard_(Chinese)-red)](https://huggingface.co/spaces/CodeGoat24/UniGenBench_Leaderboard_Chinese)
+[![Hugging Face Spaces](https://img.shields.io/badge/%F0%9F%A4%97%20UniGenBench%20-Leaderboard_(English%20Long)-orange)](https://huggingface.co/spaces/CodeGoat24/UniGenBench_Leaderboard_English_Long)
+[![Hugging Face Spaces](https://img.shields.io/badge/%F0%9F%A4%97%20UniGenBench%20-Leaderboard_(Chinese%20Long)-pink)](https://huggingface.co/spaces/CodeGoat24/UniGenBench_Leaderboard_Chinese_Long)
 </div>
 
 ## 🔥 News
 Please leave us a star ⭐ if you find this work helpful.
-- [2025/9] 🔥🔥 **GPT-4o**, **Imagen-4-Ultra**, **Nano Banana**, **Seedream-3.0**, **Qwen-Image**, **FLUX-Kontext-[Max/Pro]** are added to UniGenBench 🏅[Leaderboard(English)](https://huggingface.co/spaces/CodeGoat24/UniGenBench_Leaderboard) and 🏅[Leaderboard(Chinese)](https://huggingface.co/spaces/CodeGoat24/UniGenBench_Leaderboard_Chinese).
-- [2025/8] 🔥🔥 We release [Pref-GRPO](https://github.com/CodeGoat24/Pref-GRPO) and [UniGenBench](https://github.com/CodeGoat24/UniGenBench), and [Leaderboard](https://huggingface.co/spaces/CodeGoat24/UniGenBench_Leaderboard).
+- [2025/9] 🔥🔥 We release UniGenBench 🏅[Leaderboard (**English Long**)](https://huggingface.co/spaces/CodeGoat24/UniGenBench_Leaderboard_English_Long) and 🏅[Leaderboard (**Chinese Long**)](https://huggingface.co/spaces/CodeGoat24/UniGenBench_Leaderboard_Chinese_Long). We will continue to update them regularly.
+- [2025/9] 🔥🔥 **GPT-4o**, **Imagen-4-Ultra**, **Nano Banana**, **Seedream-3.0**, **Qwen-Image**, **FLUX-Kontext-[Max/Pro]** are added to UniGenBench 🏅[Leaderboard(**English**)](https://huggingface.co/spaces/CodeGoat24/UniGenBench_Leaderboard) and 🏅[Leaderboard(**Chinese**)](https://huggingface.co/spaces/CodeGoat24/UniGenBench_Leaderboard_Chinese).
+- [2025/8] 🔥🔥 We release [Pref-GRPO](https://github.com/CodeGoat24/Pref-GRPO) and [UniGenBench](https://github.com/CodeGoat24/UniGenBench), and 🏅[Leaderboard(**English**)](https://huggingface.co/spaces/CodeGoat24/UniGenBench_Leaderboard).
+
 
 
 ![pref_grpo_pipeline](/assets/pref_grpo_pipeline.png)
