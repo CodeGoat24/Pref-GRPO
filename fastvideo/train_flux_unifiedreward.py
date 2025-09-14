@@ -68,7 +68,6 @@ from collections import defaultdict
 def extract_normalized_rewards(sample_list):
     pattern = r"(\w+) Score \(1-5\):\s*([0-5](?:\.\d+)?)"
 
-    # 第一步：提取所有样本的打分字典
     all_scores = []
     for response in sample_list:
         matches = re.findall(pattern, response)
@@ -80,7 +79,6 @@ def extract_normalized_rewards(sample_list):
     if not all_scores:
         return []
 
-    # 第二步：找出所有出现过的维度
     keys = set()
     for s in all_scores:
         keys.update(s.keys())
@@ -106,7 +104,7 @@ def extract_normalized_rewards(sample_list):
         log_style_scores.append(style_score)
 
     dim_array = {
-        'Alignment': log_alignment_scores,  # 转换为NumPy数组（如果需要）
+        'Alignment': log_alignment_scores, 
         'Style': log_style_scores
     }
 
