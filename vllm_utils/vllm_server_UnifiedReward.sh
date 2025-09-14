@@ -1,7 +1,7 @@
 export http_proxy=
 echo ${LOCAL_IP}
 
-CUDA_VISIBLE_DEVICES=0,1,2,3 vllm serve CodeGoat24/UnifiedReward-qwen-7b \
+CUDA_VISIBLE_DEVICES=0,1,2,3 vllm serve CodeGoat24/UnifiedReward-2.0-qwen-7b \
     --host ${LOCAL_IP} \
     --trust-remote-code \
     --served-model-name UnifiedReward \
