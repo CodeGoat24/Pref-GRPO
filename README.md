@@ -2,7 +2,7 @@
     <h1 align="center"> Pref-GRPO: Pairwise Preference Reward-based GRPO for Stable Text-to-Image Reinforcement Learning
     </h1>
 
-Hunyuan, Tencent & [UnifiedReward](https://github.com/CodeGoat24/UnifiedReward) Team
+[UnifiedReward](https://github.com/CodeGoat24/UnifiedReward) Team
 
 
 <a href="https://arxiv.org/pdf/2508.20751">
@@ -27,6 +27,7 @@ Hunyuan, Tencent & [UnifiedReward](https://github.com/CodeGoat24/UnifiedReward) 
 
 ## 🔥 News
 Please leave us a star ⭐ if you find this work helpful.
+- [2025/9] 🔥🔥 **Lumina-DiMOO**, **OmniGen2**, **Infinity**, **X-Omni**, **OneCAT** are added to all 🏅Leaderboard.
 - [2025/9] 🔥🔥 **Seedream-4.0** are added to all 🏅Leaderboard.
 - [2025/9] 🔥🔥 We release UniGenBench 🏅[Leaderboard (**English Long**)](https://huggingface.co/spaces/CodeGoat24/UniGenBench_Leaderboard_English_Long) and 🏅[Leaderboard (**Chinese Long**)](https://huggingface.co/spaces/CodeGoat24/UniGenBench_Leaderboard_Chinese_Long). We will continue to update them regularly.
 - [2025/9] 🔥🔥 **GPT-4o**, **Imagen-4-Ultra**, **Nano Banana**, **Seedream-3.0**, **Qwen-Image**, **FLUX-Kontext-[Max/Pro]** are added to UniGenBench 🏅[Leaderboard(**English**)](https://huggingface.co/spaces/CodeGoat24/UniGenBench_Leaderboard) and 🏅[Leaderboard(**Chinese**)](https://huggingface.co/spaces/CodeGoat24/UniGenBench_Leaderboard_Chinese).
