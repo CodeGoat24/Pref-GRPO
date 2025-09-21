@@ -27,7 +27,7 @@
 
 ## 🔥 News
 Please leave us a star ⭐ if you find this work helpful.
-- [2025/9] 🔥🔥 **Lumina-DiMOO**, **OmniGen2**, **Infinity**, **X-Omni**, **OneCAT** are added to all 🏅Leaderboard.
+- [2025/9] 🔥🔥 **Lumina-DiMOO**, **OmniGen2**, **Infinity**, **X-Omni**, **OneCAT**, **Echo-4o**, and **MMaDA** are added to all 🏅Leaderboard.
 - [2025/9] 🔥🔥 **Seedream-4.0** are added to all 🏅Leaderboard.
 - [2025/9] 🔥🔥 We release UniGenBench 🏅[Leaderboard (**English Long**)](https://huggingface.co/spaces/CodeGoat24/UniGenBench_Leaderboard_English_Long) and 🏅[Leaderboard (**Chinese Long**)](https://huggingface.co/spaces/CodeGoat24/UniGenBench_Leaderboard_Chinese_Long). We will continue to update them regularly.
 - [2025/9] 🔥🔥 **GPT-4o**, **Imagen-4-Ultra**, **Nano Banana**, **Seedream-3.0**, **Qwen-Image**, **FLUX-Kontext-[Max/Pro]** are added to UniGenBench 🏅[Leaderboard(**English**)](https://huggingface.co/spaces/CodeGoat24/UniGenBench_Leaderboard) and 🏅[Leaderboard(**Chinese**)](https://huggingface.co/spaces/CodeGoat24/UniGenBench_Leaderboard_Chinese).
