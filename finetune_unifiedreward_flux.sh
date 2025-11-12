@@ -29,7 +29,7 @@ API_URL=http://${VLLM_SERVER_IP}:8080
 OUTPUT_DIR=outputs/${EXP_NAME}
 
 torchrun --nnodes=8 --nproc_per_node=8 --node_rank=$INDEX --master_addr=${CHIEF_IP} --master_port=8081 \
-    fastvideo/train_flux_pref_grpo.py \
+    fastvideo/train_flux_unifiedreward.py \
     --seed 42 \
     --pretrained_model_name_or_path black-forest-labs/FLUX.1-dev \
     --vae_model_path black-forest-labs/FLUX.1-dev \

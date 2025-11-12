@@ -61,7 +61,7 @@ from typing import List
 from PIL import Image
 from diffusers import FluxTransformer2DModel, AutoencoderKL
 import re
-from vllm_request import evaluate_batch
+from vllm_utils.vllm_request import evaluate_batch
 import itertools
 from collections import defaultdict
 
