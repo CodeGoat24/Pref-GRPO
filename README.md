@@ -56,6 +56,7 @@ conda activate PrefGRPO
 
 bash env_setup.sh fastvideo
 
+git clone https://github.com/mlfoundations/open_clip
 cd open_clip
 pip install -e .
 cd ..
