@@ -958,8 +958,7 @@ def main(args):
                 lr_scheduler,
                 loader,
                 noise_scheduler,
-                args.max_grad_norm,
-                preprocess_val,
+                args.max_grad_norm
             )
     
             step_time = time.time() - start_time
