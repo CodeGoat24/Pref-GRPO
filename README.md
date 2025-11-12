@@ -60,6 +60,8 @@ git clone https://github.com/mlfoundations/open_clip
 cd open_clip
 pip install -e .
 cd ..
+
+mkdir images
 ```
 
 3. Download Models
