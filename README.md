@@ -28,12 +28,14 @@
 ## 🔥 News
 Please leave us a star ⭐ if you find this work helpful.
 
-- [2025/11] 🔥 We release **Qwen-Image** and **FLUX.1-dev (LoRA)** training code for both Pref-GRPO and UnifiedReward.
+
+- [2025/11] 🔥🔥 We release **Qwen-Image** and **FLUX.1-dev (LoRA)** training code for both Pref-GRPO and UnifiedReward.
+
+- [2025/11] 🔥🔥 **Nano Banana Pro**, **FLUX.2-dev** and **Z-Image** are added to all 🏅Leaderboard.
 
 - [2025/10] 🔥 **Alibaba Group** proves the effectiveness of Pref-GRPO on aligning LLMs in [Taming the Judge: Deconflicting AI Feedback for Stable Reinforcement Learning](https://arxiv.org/pdf/2510.15514). Thanks to all contributors!
-- [2025/9] 🔥🔥 **Seedream-4.0**, **GPT-4o**, **Imagen-4-Ultra**, **Nano Banana**, **Lumina-DiMOO**, **OneCAT**, **Echo-4o**, **OmniGen2**, and **Infinity** are added to all 🏅Leaderboard.
-- [2025/9] 🔥🔥 We release UniGenBench 🏅[Leaderboard (**English Long**)](https://huggingface.co/spaces/CodeGoat24/UniGenBench_Leaderboard_English_Long) and 🏅[Leaderboard (**Chinese Long**)](https://huggingface.co/spaces/CodeGoat24/UniGenBench_Leaderboard_Chinese_Long).
-- [2025/8] 🔥🔥 We release [Pref-GRPO](https://github.com/CodeGoat24/Pref-GRPO), [UniGenBench](https://github.com/CodeGoat24/UniGenBench), 🏅[Leaderboard(**English**)](https://huggingface.co/spaces/CodeGoat24/UniGenBench_Leaderboard) and 🏅[Leaderboard(**Chinese**)](https://huggingface.co/spaces/CodeGoat24/UniGenBench_Leaderboard_Chinese).
+- [2025/9] 🔥 **Seedream-4.0**, **GPT-4o**, **Imagen-4-Ultra**, **Nano Banana**, **Lumina-DiMOO**, **OneCAT**, **Echo-4o**, **OmniGen2**, and **Infinity** are added to all 🏅Leaderboard.
+- [2025/8] 🔥 We release 🏅[Leaderboard(**English**)](https://huggingface.co/spaces/CodeGoat24/UniGenBench_Leaderboard), 🏅[Leaderboard (**English Long**)](https://huggingface.co/spaces/CodeGoat24/UniGenBench_Leaderboard_English_Long), 🏅[Leaderboard (**Chinese Long**)](https://huggingface.co/spaces/CodeGoat24/UniGenBench_Leaderboard_Chinese_Long) and 🏅[Leaderboard(**Chinese**)](https://huggingface.co/spaces/CodeGoat24/UniGenBench_Leaderboard_Chinese).
 
 
 
@@ -69,7 +71,7 @@ mkdir images
 
 3. Download Models
 ```bash
-huggingface-cli download CodeGoat24/UnifiedReward-qwen-7b
+huggingface-cli download CodeGoat24/UnifiedReward-2.0-qwen3vl-8b
 huggingface-cli download CodeGoat24/UnifiedReward-Think-qwen-7b
 
 wget https://huggingface.co/apple/DFN5B-CLIP-ViT-H-14-378/resolve/main/open_clip_pytorch_model.bin
