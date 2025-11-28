@@ -510,7 +510,6 @@ def train_one_step(
     preprocess_val=None,
 ):
     total_loss = 0.0
-    kl_total_loss = 0.0
     optimizer.zero_grad()
     (
         encoder_hidden_states, 
@@ -665,20 +664,13 @@ def train_one_step(
             )
             
 
-            kl_loss = ((prev_sample_mean - sample['prev_sample_mean_ref'][:,_]) ** 2).mean(dim=(1, 2)) / (2 * std_dev_t ** 2)
-            kl_loss = kl_loss.mean()
-
             
-            loss = (torch.mean(torch.maximum(unclipped_loss, clipped_loss)) + args.kl_beta * kl_loss) / (args.gradient_accumulation_steps * train_timesteps)
+            loss = torch.mean(torch.maximum(unclipped_loss, clipped_loss)) / (args.gradient_accumulation_steps * train_timesteps)
 
             loss.backward()
             avg_loss = loss.detach().clone()
             dist.all_reduce(avg_loss, op=dist.ReduceOp.AVG)
             total_loss += avg_loss.item()
-
-            avg_kl_loss = kl_loss.detach().clone()
-            dist.all_reduce(avg_kl_loss, op=dist.ReduceOp.AVG)
-            kl_total_loss += avg_kl_loss.item()
 
         if (i+1)%args.gradient_accumulation_steps==0:
             grad_norm = transformer.clip_grad_norm_(max_grad_norm)
@@ -691,9 +683,8 @@ def train_one_step(
             print("ratio", ratio)
             print("advantage", sample["advantages"].item())
             print("final loss", loss.item())
-            print("kl loss", kl_loss.item())
         dist.barrier()
-    return total_loss, kl_total_loss, grad_norm.item(), dim_reward
+    return total_loss, grad_norm.item(), dim_reward
 
 
 def main(args):
@@ -931,7 +922,7 @@ def main(args):
                 dist.barrier()
                 transformer.train()
 
-            loss, kl_loss, grad_norm, dim_reward = train_one_step(
+            loss, grad_norm, dim_reward = train_one_step(
                 args,
                 device, 
                 transformer,
@@ -965,7 +956,6 @@ def main(args):
                 wandb.log(
                     {
                         "train_loss": loss,
-                        "kl_loss": kl_loss,
                         "learning_rate": lr_scheduler.get_last_lr()[0],
                         "step_time": step_time,
                         "avg_step_time": avg_step_time,
@@ -1285,12 +1275,6 @@ if __name__ == "__main__":
         type=str,
         default="http://localhost:8080",
         help="api address for requesting UnifiedReward",
-    )
-    parser.add_argument(
-        "--kl_beta",
-        type=float,
-        default=0,
-        help="whether use kl loss",
     )
     parser.add_argument(
         "--grpo_step_mode",

@@ -66,7 +66,6 @@ torchrun --nnodes=8 --nproc_per_node=8 --node_rank=$INDEX --master_addr=${CHIEF_
     --timestep_fraction 0.6 \
     --clip_range 1e-4 \
     --adv_clip_max 5.0 \
-    --kl_beta 0 \
     --init_same_noise \
     --use_unifiedreward \
     --grpo_step_mode flow \
