@@ -1,12 +1,12 @@
 GPU_NUM=8 
 
-MODEL_PATH=black-forest-labs/FLUX.1-dev
-OUTPUT_DIR='flux_output'
+MODEL_PATH=Qwen/Qwen-Image
+OUTPUT_DIR='qwenimage_output'
 
 mkdir -p ${OUTPUT_DIR}
 
 torchrun --nproc_per_node=$GPU_NUM --master_port 19000 \
-    inference/flux_multi_node_inference.py \
+    inference/qwen_image_multi_node_inference.py \
     --output_dir $OUTPUT_DIR \
     --prompt_dir "data/unigenbench_test_data.csv" \
     --model_path ${MODEL_PATH}

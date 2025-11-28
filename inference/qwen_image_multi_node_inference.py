@@ -11,15 +11,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 import matplotlib.pyplot as plt
 from PIL import Image
-from diffusers import FluxPipeline
-from transformers import (
-    CLIPTextModel, CLIPTokenizer,
-    T5EncoderModel, T5TokenizerFast,
-    CLIPVisionModelWithProjection,
-)
 import pandas as pd
-from diffusers.models import AutoencoderKL, FluxTransformer2DModel
-from diffusers.schedulers import FlowMatchEulerDiscreteScheduler
 
 class UniGenBenchDataset(Dataset):
     def __init__(
@@ -65,31 +57,35 @@ def main(args):
         batch_size=args.batch_size,
         num_workers=args.dataloader_num_workers,
     )
-    
-    transformer = FluxTransformer2DModel.from_pretrained(
-        args.model_path,
-        subfolder="transformer",
-        torch_dtype=torch.float16
-    ).to(device)
 
-    vae = AutoencoderKL.from_pretrained(args.model_path, subfolder="vae", torch_dtype=torch.float16).to(device)
-    text_encoder = CLIPTextModel.from_pretrained(args.model_path, subfolder="text_encoder", torch_dtype=torch.float16).to(device)
-    tokenizer = CLIPTokenizer.from_pretrained(args.model_path, subfolder="tokenizer")
-    text_encoder_2 = T5EncoderModel.from_pretrained(args.model_path, subfolder="text_encoder_2", torch_dtype=torch.float16).to(device)
-    tokenizer_2 = T5TokenizerFast.from_pretrained(args.model_path, subfolder="tokenizer_2")
-    scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(args.model_path, subfolder="scheduler")
+    from diffusers import DiffusionPipeline
+    if torch.cuda.is_available():
+        torch_dtype = torch.bfloat16
+        device = "cuda"
+    else:
+        torch_dtype = torch.float32
+        device = "cpu"
 
-    pipe = FluxPipeline(
-        scheduler=scheduler,
-        vae=vae,
-        text_encoder=text_encoder,
-        tokenizer=tokenizer,
-        text_encoder_2=text_encoder_2,
-        tokenizer_2=tokenizer_2,
-        transformer=transformer,
-    )
-    pipe.to(device)
-    pipe.set_progress_bar_config(disable=False)
+    pipe = DiffusionPipeline.from_pretrained(args.model_path, torch_dtype=torch_dtype)
+    pipe = pipe.to(device)
+
+    positive_magic = {
+        "en": ", Ultra HD, 4K, cinematic composition.", # for english prompt
+        "zh": ", 超清，4K，电影级构图." # for chinese prompt
+    }
+
+    negative_prompt = " "
+
+    aspect_ratios = {
+        "1:1": (1328, 1328),
+        "16:9": (1664, 928),
+        "9:16": (928, 1664),
+        "4:3": (1472, 1140),
+        "3:4": (1140, 1472),
+        "3:2": (1584, 1056),
+        "2:3": (1056, 1584),
+    }
+    width, height = aspect_ratios["16:9"]
 
     for _, data in tqdm(enumerate(dataloader), disable=local_rank != 0):
         try:
@@ -99,12 +95,12 @@ def main(args):
                     prompt = data['caption'][0]
                     idx = data['idx'][0]
                     image = pipe(
-                        prompt,
-                        height=1024,
-                        width=1024,
-                        guidance_scale=3.5,
-                        num_inference_steps=30,
-                        max_sequence_length=512,
+                        prompt=prompt + positive_magic["en"],
+                        negative_prompt=negative_prompt,
+                        width=width,
+                        height=height,
+                        num_inference_steps=50,
+                        true_cfg_scale=4.0,
                         generator=torch.Generator(device="cuda").manual_seed(seed)
                     ).images[0]
 

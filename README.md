@@ -1,8 +1,8 @@
 <div align="center">
     <h1 align="center"> Pref-GRPO: Pairwise Preference Reward-based GRPO for Stable Text-to-Image Reinforcement Learning
     </h1>
-
-Hunyuan, Tencent & [UnifiedReward](https://github.com/CodeGoat24/UnifiedReward) Team
+    
+[UnifiedReward](https://github.com/CodeGoat24/UnifiedReward) Team
 
 
 <a href="https://arxiv.org/pdf/2508.20751">
@@ -27,6 +27,9 @@ Hunyuan, Tencent & [UnifiedReward](https://github.com/CodeGoat24/UnifiedReward) 
 
 ## 🔥 News
 Please leave us a star ⭐ if you find this work helpful.
+
+- [2025/11] 🔥 We release **Qwen-Image** and **FLUX.1-dev (LoRA)** training code for both Pref-GRPO and UnifiedReward.
+
 - [2025/10] 🔥 **Alibaba Group** proves the effectiveness of Pref-GRPO on aligning LLMs in [Taming the Judge: Deconflicting AI Feedback for Stable Reinforcement Learning](https://arxiv.org/pdf/2510.15514). Thanks to all contributors!
 - [2025/9] 🔥🔥 **Seedream-4.0**, **GPT-4o**, **Imagen-4-Ultra**, **Nano Banana**, **Lumina-DiMOO**, **OneCAT**, **Echo-4o**, **OmniGen2**, and **Infinity** are added to all 🏅Leaderboard.
 - [2025/9] 🔥🔥 We release UniGenBench 🏅[Leaderboard (**English Long**)](https://huggingface.co/spaces/CodeGoat24/UniGenBench_Leaderboard_English_Long) and 🏅[Leaderboard (**Chinese Long**)](https://huggingface.co/spaces/CodeGoat24/UniGenBench_Leaderboard_Chinese_Long).
@@ -89,28 +92,44 @@ bash vllm_utils/vllm_server_UnifiedReward_Think.sh
 we use training prompts in [UniGenBench](https://github.com/CodeGoat24/UniGenBench), as shown in ```"./data/unigenbench_train_data.txt"```.
 
 ```bash
+# FLUX.1-dev
 bash fastvideo/data_preprocess/preprocess_flux_rl_embeddings.sh
+
+# Qwen-Image
+pip install diffusers==0.35.0 peft==0.17.0 transformers==4.56.0
+
+bash fastvideo/data_preprocess/preprocess_qwen_image_rl_embeddings.sh
 ```
 
 
 #### 3. Train
 ```bash
-# Finetune FLUX.1-dev using UnifiedReward-Think for Pref-GRPO
-bash finetune_prefgrpo_flux.sh
+# FLUX.1-dev
+## UnifiedReward-Think for Pref-GRPO
+bash scripts/finetune_prefgrpo_flux.sh
+bash scripts/finetune_prefgrpo_flux_lora.sh
 
-bash finetune_prefgrpo_flux_lora.sh
+## UnifiedReward for Point Score-based GRPO
+bash scripts/finetune_unifiedreward_flux.sh
+bash scripts/finetune_unifiedreward_flux_lora.sh
 
-# Finetune FLUX.1-dev using UnifiedReward for Point Score-based GRPO
-bash finetune_unifiedreward_flux.sh
+# Qwen-Image
+## UnifiedReward-Think for Pref-GRPO
+bash scripts/finetune_prefgrpo_qwenimage_grpo.sh
 
-bash finetune_unifiedreward_flux_lora.sh
+## UnifiedReward for Point Score-based GRPO
+bash scripts/finetune_unifiedreward_qwenimage_grpo.sh
 
 ```
 
 ### 🚀 Inference and Evaluation
 we use test prompts in [UniGenBench](https://github.com/CodeGoat24/UniGenBench), as shown in ```"./data/unigenbench_test_data.csv"```.
 ```bash
+# FLUX.1-dev
 bash inference/flux_dist_infer.sh
+
+# Qwen-Image
+bash inference/qwen_image_dist_infer.sh
 ```
 
 Then, evaluate the outputs following [UniGenBench](https://github.com/CodeGoat24/UniGenBench).

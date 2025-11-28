@@ -1172,12 +1172,6 @@ if __name__ == "__main__":
         help="num_generations per prompt",
     )
     parser.add_argument(
-        "--use_hpsv2",
-        action="store_true",
-        default=False,
-        help="whether use hpsv2 as reward model",
-    )
-    parser.add_argument(
         "--ignore_last",
         action="store_true",
         default=False,
