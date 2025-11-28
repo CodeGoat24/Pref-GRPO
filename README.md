@@ -95,7 +95,16 @@ bash fastvideo/data_preprocess/preprocess_flux_rl_embeddings.sh
 
 #### 3. Train
 ```bash
+# Finetune FLUX.1-dev using UnifiedReward-Think for Pref-GRPO
 bash finetune_prefgrpo_flux.sh
+
+bash finetune_prefgrpo_flux_lora.sh
+
+# Finetune FLUX.1-dev using UnifiedReward for Point Score-based GRPO
+bash finetune_unifiedreward_flux.sh
+
+bash finetune_unifiedreward_flux_lora.sh
+
 ```
 
 ### 🚀 Inference and Evaluation
