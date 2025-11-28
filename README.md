@@ -75,7 +75,9 @@ wget https://huggingface.co/apple/DFN5B-CLIP-ViT-H-14-378/resolve/main/open_clip
 
 1. Install vLLM
 ```bash
-pip install vllm==0.9.0.1 transformers==4.52.4
+pip install vllm>=0.11.0
+
+pip install qwen-vl-utils==0.0.14
 ```
 2. Start server
 ```bash
