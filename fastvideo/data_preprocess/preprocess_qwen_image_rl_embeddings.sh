@@ -4,8 +4,6 @@ OUTPUT_DIR="data/unigenbench_train_data_qwenimage/rl_embeddings"
 
 # pip install diffusers==0.35.0 peft==0.17.0 transformers==4.56.0
 
-GPU_NUM=8
-
 torchrun --nproc_per_node=$GPU_NUM --master_port 19002 \
     fastvideo/data_preprocess/preprocess_qwenimage_embedding.py \
     --model_path $MODEL_PATH \
