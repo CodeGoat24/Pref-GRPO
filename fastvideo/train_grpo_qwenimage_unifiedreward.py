@@ -503,7 +503,7 @@ def sample_reference_model(
                 latents = latents / latents_std + latents_mean
                 image = vae.decode(latents, return_dict=False)[0][:, :, 0]
                 decoded_image = image_processor.postprocess(image)
-        save_path = f"./images/flux_{rank}_{index}.png"
+        save_path = f"./images/qwenimage_{rank}_{index}.png"
         decoded_image[0].save(save_path)
 
         if args.use_unifiedreward:
