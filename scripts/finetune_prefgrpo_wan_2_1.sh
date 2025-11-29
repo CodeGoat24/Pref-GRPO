@@ -54,7 +54,6 @@ torchrun --nnodes=2 --nproc_per_node=8 --master_port=8081 \
     --clip_range 1e-4 \
     --adv_clip_max 5.0 \
     --cfg_infer 5.0 \
-    --use_clip \
     --use_unifiedreward_think \
     --grpo_step_mode flow \
     --api_url ${API_URL} \
