@@ -29,8 +29,8 @@ torchrun --nnodes=2 --nproc_per_node=8 --master_port=8081 \
     --sp_size 1 \
     --train_sp_batch_size 1 \
     --dataloader_num_workers 4 \
-    --gradient_accumulation_steps 8 \
-    --learning_rate 8e-6 \
+    --gradient_accumulation_steps 4 \
+    --learning_rate 6e-6 \
     --mixed_precision bf16 \
     --checkpointing_steps 100 \
     --allow_tf32 \
@@ -45,7 +45,7 @@ torchrun --nnodes=2 --nproc_per_node=8 --master_port=8081 \
     --sampler_seed 1223627 \
     --max_grad_norm 1.0 \
     --weight_decay 0.0001 \
-    --num_generations 12 \
+    --num_generations 8 \
     --shift 3 \
     --use_group \
     --ignore_last \
