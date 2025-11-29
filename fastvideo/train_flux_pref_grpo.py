@@ -512,14 +512,14 @@ def sample_reference_model(
     if args.use_unifiedreward_think:
         all_rewards = torch.cat(all_rewards, dim=0)
     else:
-        all_rewards = torch.zeros(len(all_input_data), dtype=torch.float32, device=device)
+        all_rewards = torch.zeros(B, dtype=torch.float32, device=device)
 
 
     if args.use_clip:
         dim_reward.update({"CLIP_score": torch.cat(all_clip_rewards).cpu().numpy()})
         all_clip_rewards = torch.cat(all_clip_rewards, dim=0)
     else:
-        all_clip_rewards = torch.zeros(len(all_input_data), dtype=torch.float32, device=device)
+        all_clip_rewards = torch.zeros(B, dtype=torch.float32, device=device)
 
     all_image_ids = torch.stack(all_image_ids, dim=0)
     
@@ -651,7 +651,12 @@ def train_one_step(
                 clip_advantages[start_idx:end_idx] = (group_clip_rewards - group_clip_mean) / group_clip_std
 
         
-        samples["advantages"] = 0.7 * advantages + 1.4 * clip_advantages
+        if args.use_unifiedreward_think and args.use_clip:
+            samples["advantages"] = 0.7 * advantages + 1.4 * clip_advantages
+        elif args.use_unifiedreward_think:
+            samples["advantages"] = advantages
+        elif args.use_clip:
+            samples["advantages"] = clip_advantages
     else:
         advantages = torch.zeros_like(samples["rewards"])
         clip_advantages = torch.zeros_like(samples["clip_rewards"])
@@ -662,7 +667,12 @@ def train_one_step(
         if args.use_clip:
             clip_advantages = (samples["clip_rewards"] - gathered_clip_reward.mean())/(gathered_clip_reward.std()+1e-8)
 
-        samples["advantages"] = 0.7 * advantages + 1.4 * clip_advantages
+        if args.use_unifiedreward_think and args.use_clip:
+            samples["advantages"] = 0.7 * advantages + 1.4 * clip_advantages
+        elif args.use_unifiedreward_think:
+            samples["advantages"] = advantages
+        elif args.use_clip:
+            samples["advantages"] = clip_advantages
 
     
     perms = torch.stack(
@@ -736,7 +746,7 @@ def train_one_step(
             print("winrate_reward", sample["rewards"].item())
             print("clip_reward", sample["clip_rewards"].item())
             print("ratio", ratio)
-            print("preference_advantage", sample["advantages"].item())
+            print("advantage", sample["advantages"].item())
             print("final loss", loss.item())
         dist.barrier()
     return total_loss, grad_norm.item(), dim_reward

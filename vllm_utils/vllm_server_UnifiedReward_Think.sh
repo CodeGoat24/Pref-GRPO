@@ -1,8 +1,7 @@
-export http_proxy=
-echo ${LOCAL_IP}
+unset http_proxy
 
 CUDA_VISIBLE_DEVICES=0,1,2,3 vllm serve CodeGoat24/UnifiedReward-Think-qwen-7b \
-    --host ${LOCAL_IP} \
+    --host localhost \
     --trust-remote-code \
     --served-model-name UnifiedReward \
     --gpu-memory-utilization 0.9 \
