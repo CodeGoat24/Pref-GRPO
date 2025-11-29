@@ -29,7 +29,7 @@
 Please leave us a star ⭐ if you find this work helpful.
 
 
-- [2025/11] 🔥🔥 We release **Qwen-Image** and **FLUX.1-dev (LoRA)** training code for both Pref-GRPO and UnifiedReward.
+- [2025/11] 🔥🔥 We release **Qwen-Image**, **Wan2.1** and **FLUX.1-dev (LoRA)** training code.
 
 - [2025/11] 🔥🔥 **Nano Banana Pro**, **FLUX.2-dev** and **Z-Image** are added to all 🏅Leaderboard.
 
@@ -101,6 +101,9 @@ bash fastvideo/data_preprocess/preprocess_flux_rl_embeddings.sh
 pip install diffusers==0.35.0 peft==0.17.0 transformers==4.56.0
 
 bash fastvideo/data_preprocess/preprocess_qwen_image_rl_embeddings.sh
+
+# Wan2.1
+bash fastvideo/data_preprocess/preprocess_wan_2_1_rl_embeddings.sh.sh
 ```
 
 
@@ -122,6 +125,9 @@ bash scripts/finetune_prefgrpo_qwenimage_grpo.sh
 ## UnifiedReward for Point Score-based GRPO
 bash scripts/finetune_unifiedreward_qwenimage_grpo.sh
 
+# Wan2.1
+## Pref-GRPO
+bash scripts/finetune_prefgrpo_wan_2_1.sh
 ```
 
 ### 🚀 Inference and Evaluation
