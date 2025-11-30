@@ -138,6 +138,9 @@ bash inference/flux_dist_infer.sh
 
 # Qwen-Image
 bash inference/qwen_image_dist_infer.sh
+
+# Wan2.1
+bash inference/wan_dist_infer.sh
 ```
 
 Then, evaluate the outputs following [UniGenBench](https://github.com/CodeGoat24/UniGenBench).

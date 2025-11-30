@@ -38,8 +38,8 @@ torchrun --nnodes=2 --nproc_per_node=8 --master_port=8081 \
     --output_dir data/outputs/grpo \
     --h 512 \
     --w 512 \
-    --t 33 \
-    --sampling_steps 20 \
+    --t 49 \
+    --sampling_steps 50 \
     --eta 0.7 \
     --lr_warmup_ratio 0 \
     --sampler_seed 1223627 \
