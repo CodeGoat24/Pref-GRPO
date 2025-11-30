@@ -935,7 +935,7 @@ def main(args):
         # TODO
 
     progress_bar = tqdm(
-        range(0, 100000),
+        range(0, step_per_epoch * args.num_train_epochs),
         initial=init_steps,
         desc="Steps",
         # Only show the progress bar once on each machine.
