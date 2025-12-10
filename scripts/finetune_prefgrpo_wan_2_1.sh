@@ -40,7 +40,7 @@ torchrun --nnodes=2 --nproc_per_node=8 --master_port=8081 \
     --w 512 \
     --t 49 \
     --sampling_steps 50 \
-    --eta 0.7 \
+    --eta 0.3 \
     --lr_warmup_ratio 0 \
     --sampler_seed 1223627 \
     --max_grad_norm 1.0 \
@@ -55,5 +55,6 @@ torchrun --nnodes=2 --nproc_per_node=8 --master_port=8081 \
     --adv_clip_max 5.0 \
     --cfg_infer 5.0 \
     --use_unifiedreward_think \
+    --use_clip \
     --grpo_step_mode flow \
     --api_url ${API_URL} \
