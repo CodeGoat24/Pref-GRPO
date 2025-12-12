@@ -900,16 +900,28 @@ def main(args):
     ).to(device)
     # Only tune LoRA adapters while freezing WAN base weights.
     transformer.requires_grad_(False)
+
+    target_modules=[
+        "add_k_proj",
+        "add_q_proj",
+        "add_v_proj",
+        "to_add_out",
+        "to_k",
+        "to_out.0",
+        "to_q",
+        "to_v",
+    ]
+
     transformer_lora_config = LoraConfig(
         r=args.lora_rank,
         lora_alpha=args.lora_alpha,
         init_lora_weights=True,
-        target_modules=["to_k", "to_q", "to_v", "to_out.0"],
+        target_modules=target_modules,
     )
     transformer.add_adapter(transformer_lora_config)
     transformer.config.lora_rank = args.lora_rank
     transformer.config.lora_alpha = args.lora_alpha
-    transformer.config.lora_target_modules = ["to_k", "to_q", "to_v", "to_out.0"]
+    transformer.config.lora_target_modules = target_modules
 
     if args.resume_from_lora_checkpoint:
         load_wan_lora_weights(transformer, pipe, args.resume_from_lora_checkpoint)

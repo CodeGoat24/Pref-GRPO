@@ -807,11 +807,27 @@ def main(args):
     from diffusers.utils import convert_unet_state_dict_to_peft
     pipe = FluxPipeline
     transformer.requires_grad_(False)
+
+    target_modules=[
+        "attn.to_k",
+        "attn.to_q",
+        "attn.to_v",
+        "attn.to_out.0",
+        "attn.add_k_proj",
+        "attn.add_q_proj",
+        "attn.add_v_proj",
+        "attn.to_add_out",
+        "ff.net.0.proj",
+        "ff.net.2",
+        "ff_context.net.0.proj",
+        "ff_context.net.2",
+    ]
+    
     transformer_lora_config = LoraConfig(
         r=args.lora_rank,
         lora_alpha=args.lora_alpha,
         init_lora_weights=True,
-        target_modules=["to_k", "to_q", "to_v", "to_out.0"],
+        target_modules=target_modules,
     )
     transformer.add_adapter(transformer_lora_config)
 
@@ -846,7 +862,7 @@ def main(args):
 
     transformer.config.lora_rank = args.lora_rank
     transformer.config.lora_alpha = args.lora_alpha
-    transformer.config.lora_target_modules = ["to_k", "to_q", "to_v", "to_out.0"]
+    transformer.config.lora_target_modules = target_modules
     transformer._no_split_modules = [
         no_split_module.__name__ for no_split_module in no_split_modules
     ]
