@@ -923,7 +923,7 @@ def main(args):
         f"  Total train batch size (w. data & sequence parallel, accumulation) = {total_batch_size}"
     )
     main_print(f"  Gradient Accumulation steps = {args.gradient_accumulation_steps}")
-    main_print(f"  Total optimization steps per epoch = {args.max_train_steps}")
+    main_print(f"  Total optimization steps per epoch = {step_per_epoch}")
     main_print(
         f"  Total training parameters per FSDP shard = {sum(p.numel() for p in transformer.parameters() if p.requires_grad) / 1e9} B"
     )
