@@ -503,6 +503,7 @@ def sample_reference_model(
                 latents = latents / latents_std + latents_mean
                 image = vae.decode(latents, return_dict=False)[0][:, :, 0]
                 decoded_image = image_processor.postprocess(image)
+        os.makedirs("images", exist_ok=True)
         save_path = f"./images/qwenimage_{rank}_{index}.png"
         decoded_image[0].save(save_path)
 
@@ -950,6 +951,7 @@ def main(args):
             )
             progress_bar.update(1)
             if rank <= 0:
+                global_step = epoch * step_per_epoch + step
                 dim_reward_log = {k: np.mean(v) for k, v in dim_reward.items()}
                 dim_reward_log.update({f"{k}_std": np.std(v) for k, v in dim_reward.items()})
 
@@ -962,7 +964,7 @@ def main(args):
                         "grad_norm": grad_norm,
                          **dim_reward_log
                     },
-                    step=step,
+                    step=global_step,
                 )
 
 

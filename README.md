@@ -128,6 +128,7 @@ bash scripts/finetune_unifiedreward_qwenimage_grpo.sh
 # Wan2.1
 ## Pref-GRPO
 bash scripts/finetune_prefgrpo_wan_2_1.sh
+bash scripts/finetune_prefgrpo_wan_2_1_lora.sh
 ```
 
 ### 🚀 Inference and Evaluation

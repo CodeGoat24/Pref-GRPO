@@ -475,6 +475,7 @@ def sample_reference_model(
                 image = vae.decode(latents, return_dict=False)[0]
                 decoded_image = image_processor.postprocess(
                 image)
+        os.makedirs("images", exist_ok=True)
         save_path = f"./images/flux_{rank}_{index}.png"
         decoded_image[0].save(save_path)
 

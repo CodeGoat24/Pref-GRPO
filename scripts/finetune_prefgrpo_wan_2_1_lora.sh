@@ -14,7 +14,7 @@ API_URL=http://${VLLM_SERVER_IP}:8080
 OUTPUT_DIR=outputs/${EXP_NAME}
 
 torchrun --nnodes=2 --nproc_per_node=8 --master_port=8081 \
-    fastvideo/train_wan_2_1_pref_grpo.py \
+    fastvideo/train_wan_2_1_pref_grpo_lora.py \
     --seed 42 \
     --pretrained_model_name_or_path Wan-AI/Wan2.1-T2V-1.3B-Diffusers \
     --vae_model_path Wan-AI/Wan2.1-T2V-1.3B-Diffusers \
@@ -29,7 +29,7 @@ torchrun --nnodes=2 --nproc_per_node=8 --master_port=8081 \
     --train_sp_batch_size 1 \
     --dataloader_num_workers 4 \
     --gradient_accumulation_steps 4 \
-    --learning_rate 6e-6 \
+    --learning_rate 1e-4 \
     --mixed_precision bf16 \
     --checkpointing_steps 100 \
     --allow_tf32 \
@@ -57,3 +57,5 @@ torchrun --nnodes=2 --nproc_per_node=8 --master_port=8081 \
     --use_clip \
     --grpo_step_mode flow \
     --api_url ${API_URL} \
+    --lora_rank 128 \
+    --lora_alpha 256 \

@@ -532,6 +532,7 @@ def sample_reference_model(
                 latents = latents / latents_std + latents_mean
                 video = vae.decode(latents, return_dict=False)[0]
                 decoded_video = video_processor.postprocess_video(video)
+        os.makedirs("videos", exist_ok=True)
         save_path = f"./videos/wan_2_1_{rank}_{index}.mp4"
         export_to_video(decoded_video[0], save_path, fps=16)
 
@@ -1023,6 +1024,7 @@ def main(args):
             )
             progress_bar.update(1)
             if rank <= 0:
+                global_step = epoch * step_per_epoch + step
                 dim_reward_log = {k: np.mean(v) for k, v in dim_reward.items()}
                 dim_reward_log.update({f"{k}_std": np.std(v) for k, v in dim_reward.items()})
 
@@ -1035,7 +1037,7 @@ def main(args):
                         "grad_norm": grad_norm,
                         **dim_reward_log
                     },
-                    step=step,
+                    step=global_step,
                 )
 
 
