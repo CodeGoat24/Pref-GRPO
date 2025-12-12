@@ -5,7 +5,7 @@ export WANDB_MODE=offline
 export WANDB_API_KEY=""
 
 
-export EXP_NAME="Pref-GRPO_Wan2_1"
+export EXP_NAME="pref_wan2_1"
 
 export VLLM_SERVER_IP=localhost
 

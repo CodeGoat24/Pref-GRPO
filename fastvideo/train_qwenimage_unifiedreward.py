@@ -849,7 +849,7 @@ def main(args):
         last_epoch=init_steps - 1,
     )
     if rank <= 0:
-        project = "qwenimage"
+        project = "unifiedreward_qwenimage"
         wandb.init(project=project, config=args, name=args.exp_name)
 
     # Train!

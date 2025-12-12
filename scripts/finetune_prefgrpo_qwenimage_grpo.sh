@@ -4,7 +4,7 @@ export WANDB_BASE_URL="https://api.wandb.ai"
 export WANDB_MODE=online
 export WANDB_API_KEY=""
 
-export EXP_NAME="Pref-GRPO_QwenImage"
+export EXP_NAME="pref_qwenimage"
 
 export VLLM_SERVER_IP=localhost
 

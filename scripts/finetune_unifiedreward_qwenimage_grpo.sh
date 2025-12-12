@@ -5,7 +5,7 @@ export WANDB_MODE=online
 export WANDB_API_KEY="950830b8d9b626ebab8e09edfbcd5f96b8770bd8"
 
 
-export EXP_NAME="UnifiedReward_QwenImage"
+export EXP_NAME="unifiedreward_qwenimage"
 
 export VLLM_SERVER_IP=localhost
 

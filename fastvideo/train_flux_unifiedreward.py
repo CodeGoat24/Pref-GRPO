@@ -788,7 +788,7 @@ def main(args):
     #vae.enable_tiling()
 
     if rank <= 0:
-        project = "Pref-GRPO_flux"
+        project = "unifiedreward_flux"
         wandb.init(project=project, config=args, name=args.exp_name)
 
     # Train!

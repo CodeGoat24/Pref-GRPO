@@ -3,7 +3,7 @@ export WANDB_DISABLED=false
 export WANDB_BASE_URL="https://api.wandb.ai"
 export WANDB_MODE=online
 
-export EXP_NAME="UnifiedReward_flux"
+export EXP_NAME="unifiedreward_flux"
 
 export WANDB_API_KEY=""
 export VLLM_SERVER_IP=localhost

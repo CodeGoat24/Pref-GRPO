@@ -999,7 +999,7 @@ def main(args):
     #vae.enable_tiling()
 
     if rank <= 0:
-        project = "prefgrpo_wan_2_1_lora"
+        project = "pref_wan_2_1_lora"
         wandb.init(project=project, config=args, name=args.exp_name)
 
     # Train!

@@ -822,7 +822,7 @@ def main(args):
         "ff_context.net.0.proj",
         "ff_context.net.2",
     ]
-    
+
     transformer_lora_config = LoraConfig(
         r=args.lora_rank,
         lora_alpha=args.lora_alpha,
@@ -925,7 +925,7 @@ def main(args):
     #vae.enable_tiling()
 
     if rank <= 0:
-        project = "Pref-GRPO_flux_lora"
+        project = "pref_flux_lora"
         wandb.init(project=project, config=args, name=args.exp_name)
 
     # Train!
