@@ -29,7 +29,7 @@
 Please leave us a star ⭐ if you find this work helpful.
 
 
-- [2025/11] 🔥🔥 We release **Qwen-Image**, **Wan2.1** and **FLUX.1-dev (LoRA)** training code.
+- [2025/11] 🔥🔥 We release **Qwen-Image**, **Wan2.1** and **FLUX.1-dev** Full/LoRA training code.
 
 - [2025/11] 🔥🔥 **Nano Banana Pro**, **FLUX.2-dev** and **Z-Image** are added to all 🏅Leaderboard.
 
@@ -121,9 +121,11 @@ bash scripts/finetune_unifiedreward_flux_lora.sh
 # Qwen-Image
 ## UnifiedReward-Think for Pref-GRPO
 bash scripts/finetune_prefgrpo_qwenimage_grpo.sh
+bash scripts/finetune_prefgrpo_qwenimage_grpo_lora.sh
 
 ## UnifiedReward for Point Score-based GRPO
 bash scripts/finetune_unifiedreward_qwenimage_grpo.sh
+bash scripts/finetune_unifiedreward_qwenimage_grpo_lora.sh
 
 # Wan2.1
 ## Pref-GRPO
