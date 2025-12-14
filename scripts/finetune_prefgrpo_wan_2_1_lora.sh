@@ -29,7 +29,7 @@ torchrun --nnodes=2 --nproc_per_node=8 --master_port=8081 \
     --train_sp_batch_size 1 \
     --dataloader_num_workers 4 \
     --gradient_accumulation_steps 4 \
-    --learning_rate 5e-5 \
+    --learning_rate 2e-5 \
     --mixed_precision bf16 \
     --checkpointing_steps 100 \
     --allow_tf32 \
@@ -57,5 +57,5 @@ torchrun --nnodes=2 --nproc_per_node=8 --master_port=8081 \
     --use_clip \
     --grpo_step_mode flow \
     --api_url ${API_URL} \
-    --lora_rank 16 \
-    --lora_alpha 32 \
+    --lora_rank 64 \
+    --lora_alpha 128 \
