@@ -172,7 +172,7 @@ def flow_grpo_step(
     # mean along all but batch dimension
     log_prob = log_prob.mean(dim=tuple(range(1, log_prob.ndim)))
 
-    return prev_sample, pred_original_sample, log_prob, prev_sample_mean, std_dev_t * torch.sqrt(-1*dt)
+    return prev_sample, pred_original_sample, log_prob
 
 
 def dance_grpo_step(
@@ -212,7 +212,7 @@ def dance_grpo_step(
 
         # mean along all but batch dimension
         log_prob = log_prob.mean(dim=tuple(range(1, log_prob.ndim)))
-        return prev_sample, pred_original_sample, log_prob, prev_sample_mean, std_dev_t
+        return prev_sample, pred_original_sample, log_prob
     else:
         return prev_sample_mean,pred_original_sample
 
@@ -272,7 +272,6 @@ def run_sample_step(
     if grpo_sample:
         all_latents = [z]
         all_log_probs = []
-        all_prev_sample_mean_ref = []
         for i in progress_bar:  # Add progress bar
             B = encoder_hidden_states.shape[0]
             sigma = sigma_schedule[i]
@@ -296,9 +295,9 @@ def run_sample_step(
                     return_dict=False,
                 )[0]
             if args.grpo_step_mode == 'dance': 
-                z, pred_original, log_prob, prev_sample_mean, std_dev_t = dance_grpo_step(pred, z.to(torch.float32), args.eta, sigmas=sigma_schedule, index=i, prev_sample=None, grpo=True, sde_solver=True)
+                z, pred_original, log_prob = dance_grpo_step(pred, z.to(torch.float32), args.eta, sigmas=sigma_schedule, index=i, prev_sample=None, grpo=True, sde_solver=True)
             elif args.grpo_step_mode == 'flow': 
-                z, pred_original, log_prob, prev_sample_mean, std_dev_t = flow_grpo_step(
+                z, pred_original, log_prob = flow_grpo_step(
                         model_output=pred,
                         latents=z.to(torch.float32),
                         eta=args.eta,
@@ -309,12 +308,10 @@ def run_sample_step(
             z.to(torch.bfloat16)
             all_latents.append(z)
             all_log_probs.append(log_prob)
-            all_prev_sample_mean_ref.append(prev_sample_mean)
         latents = pred_original
         all_latents = torch.stack(all_latents, dim=1)  # (batch_size, num_steps + 1, 4, 64, 64)
         all_log_probs = torch.stack(all_log_probs, dim=1)  # (batch_size, num_steps, 1)
-        all_prev_sample_mean_ref = torch.stack(all_prev_sample_mean_ref, dim=1)
-        return z, latents, all_latents, all_log_probs, all_prev_sample_mean_ref
+        return z, latents, all_latents, all_log_probs
 
         
 def grpo_one_step(
@@ -349,9 +346,9 @@ def grpo_one_step(
             return_dict=False,
         )[0]
     if args.grpo_step_mode == 'dance': 
-        z, pred_original, log_prob, prev_sample_mean, std_dev_t = dance_grpo_step(pred, latents.to(torch.float32), args.eta, sigma_schedule, i, prev_sample=pre_latents.to(torch.float32), grpo=True, sde_solver=True)
+        z, pred_original, log_prob = dance_grpo_step(pred, latents.to(torch.float32), args.eta, sigma_schedule, i, prev_sample=pre_latents.to(torch.float32), grpo=True, sde_solver=True)
     elif args.grpo_step_mode == 'flow': 
-        z, pred_original, log_prob, prev_sample_mean, std_dev_t = flow_grpo_step(
+        z, pred_original, log_prob = flow_grpo_step(
             model_output=pred,
             latents=latents.to(torch.float32),
             eta=args.eta,
@@ -359,7 +356,7 @@ def grpo_one_step(
             index=i,
             prev_sample=pre_latents.to(torch.float32),
         )
-    return log_prob, prev_sample_mean, std_dev_t
+    return log_prob
 
 
 
@@ -401,8 +398,6 @@ def sample_reference_model(
     all_rewards = []
     all_image_ids = []
 
-    all_prev_sample_mean_ref = []
-
     all_input_data = []
     if args.init_same_noise:
         input_latents = torch.randn(
@@ -427,7 +422,7 @@ def sample_reference_model(
         grpo_sample=True
         progress_bar = tqdm(range(0, sample_steps), desc="Sampling Progress")
         with torch.no_grad():
-            z, latents, batch_latents, batch_log_probs, batch_prev_sample_mean_ref = run_sample_step(
+            z, latents, batch_latents, batch_log_probs = run_sample_step(
                 args,
                 input_latents_new,
                 progress_bar,
@@ -443,7 +438,6 @@ def sample_reference_model(
         all_image_ids.append(image_ids)
         all_latents.append(batch_latents)
         all_log_probs.append(batch_log_probs)
-        all_prev_sample_mean_ref.append(batch_prev_sample_mean_ref)
         vae.enable_tiling()
         
         image_processor = VaeImageProcessor(16)
@@ -481,10 +475,7 @@ def sample_reference_model(
     style_reward = torch.cat(style_reward, dim=0)
 
     all_image_ids = torch.stack(all_image_ids, dim=0)
-    all_prev_sample_mean_ref = torch.cat(all_prev_sample_mean_ref, dim=0)
-
-    
-    return alignment_reward, style_reward, all_latents, all_log_probs, all_prev_sample_mean_ref, sigma_schedule, all_image_ids, dim_reward
+    return alignment_reward, style_reward, all_latents, all_log_probs, sigma_schedule, all_image_ids, dim_reward
 
 
 def gather_tensor(tensor):
@@ -535,7 +526,7 @@ def train_one_step(
             caption = [item for item in caption for _ in range(args.num_generations)]
         else:
             raise ValueError(f"Unsupported caption type: {type(caption)}")
-    alignment_reward, style_reward, all_latents, all_log_probs, all_prev_sample_mean_ref, sigma_schedule, all_image_ids, dim_reward = sample_reference_model(
+    alignment_reward, style_reward, all_latents, all_log_probs, sigma_schedule, all_image_ids, dim_reward = sample_reference_model(
             args,
             device, 
             transformer,
@@ -563,9 +554,6 @@ def train_one_step(
             :, 1:
         ][:, :-1],  # each entry is the latent after timestep t
         "log_probs": all_log_probs[:, :-1],
-        "prev_sample_mean_ref": all_prev_sample_mean_ref[
-            :, :-1
-        ][:, :-1],
         "alignment_reward": alignment_reward.to(torch.float32),
         "style_reward": style_reward.to(torch.float32),
         "image_ids": all_image_ids,
@@ -634,7 +622,7 @@ def train_one_step(
         for _ in range(train_timesteps):
             clip_range = args.clip_range
             adv_clip_max = args.adv_clip_max
-            new_log_probs, prev_sample_mean, std_dev_t = grpo_one_step(
+            new_log_probs = grpo_one_step(
                 args,
                 sample["latents"][:,_],
                 sample["next_latents"][:,_],

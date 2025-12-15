@@ -5,7 +5,7 @@ export WANDB_MODE=offline
 export WANDB_API_KEY=""
 
 
-export EXP_NAME="pref_wan2_1"
+export EXP_NAME="pref_wan2_1_lora"
 
 export VLLM_SERVER_IP=localhost
 
@@ -59,3 +59,4 @@ torchrun --nnodes=2 --nproc_per_node=8 --master_port=8081 \
     --api_url ${API_URL} \
     --lora_rank 64 \
     --lora_alpha 128 \
+    --kl_beta 0.004

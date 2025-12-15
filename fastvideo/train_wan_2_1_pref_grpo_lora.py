@@ -134,7 +134,7 @@ def cal_win_rate(all_input_data, args):
         compare_count["overall"][idx2] += 1
 
         output = result["model_output"]
-        print(output)
+        # print(output)
 
         final_conclusion = extract_answer(output)
         
@@ -279,6 +279,7 @@ def flow_grpo_step(
     index: int,
     prev_sample: torch.Tensor,
     generator: Optional[torch.Generator] = None,
+    return_stats: bool = False,
 ):
     device = model_output.device
 
@@ -302,15 +303,19 @@ def flow_grpo_step(
         )
         prev_sample = prev_sample_mean + std_dev_t * torch.sqrt(-1*dt) * variance_noise
     
+    noise_scale = std_dev_t * torch.sqrt(-1 * dt)
     
     log_prob = (
-        -((prev_sample.detach() - prev_sample_mean) ** 2) / (2 * ((std_dev_t * torch.sqrt(-1*dt))**2))
-        - torch.log(std_dev_t * torch.sqrt(-1*dt))
+        -((prev_sample.detach() - prev_sample_mean) ** 2) / (2 * (noise_scale**2))
+        - torch.log(noise_scale)
         - torch.log(torch.sqrt(2 * torch.as_tensor(math.pi)))
     )
 
     # mean along all but batch dimension
     log_prob = log_prob.mean(dim=tuple(range(1, log_prob.ndim)))
+
+    if return_stats:
+        return prev_sample, pred_original_sample, log_prob, prev_sample_mean, noise_scale, dt
 
     return prev_sample, pred_original_sample, log_prob
 
@@ -324,6 +329,7 @@ def dance_grpo_step(
     prev_sample: torch.Tensor,
     grpo: bool,
     sde_solver: bool,
+    return_stats: bool = False,
 ):
     sigma = sigmas[index]
     dsigma = sigmas[index + 1] - sigma
@@ -352,6 +358,9 @@ def dance_grpo_step(
 
         # mean along all but batch dimension
         log_prob = log_prob.mean(dim=tuple(range(1, log_prob.ndim)))
+        if return_stats:
+            noise_scale = std_dev_t
+            return prev_sample, pred_original_sample, log_prob, prev_sample_mean, noise_scale, delta_t
         return prev_sample, pred_original_sample, log_prob
     else:
         return prev_sample_mean,pred_original_sample
@@ -466,9 +475,9 @@ def grpo_one_step(
             timesteps,
             i,
             sigma_schedule,
+            return_stats: bool = False,
 ):
     B = encoder_hidden_states.shape[0]
-    transformer.train()
     if args.cfg_infer>1:
         with torch.autocast("cuda", torch.bfloat16):
             pred= transformer(
@@ -491,18 +500,79 @@ def grpo_one_step(
             )[0]
             
     if args.grpo_step_mode == 'dance': 
-        z, pred_original, log_prob = dance_grpo_step(pred, latents.to(torch.float32), args.eta, sigma_schedule, i, prev_sample=pre_latents.to(torch.float32), grpo=True, sde_solver=True)
+        z, pred_original, log_prob, prev_sample_mean, noise_scale, dt = dance_grpo_step(
+            pred,
+            latents.to(torch.float32),
+            args.eta,
+            sigma_schedule,
+            i,
+            prev_sample=pre_latents.to(torch.float32),
+            grpo=True,
+            sde_solver=True,
+            return_stats=True,
+        )
     elif args.grpo_step_mode == 'flow': 
-        z, pred_original, log_prob = flow_grpo_step(
+        z, pred_original, log_prob, prev_sample_mean, noise_scale, dt = flow_grpo_step(
             model_output=pred,
             latents=latents.to(torch.float32),
             eta=args.eta,
             sigmas=sigma_schedule,
             index=i,
             prev_sample=pre_latents.to(torch.float32),
+            return_stats=True,
         )    
     
+    if return_stats:
+        return log_prob, prev_sample_mean, noise_scale, dt
     return log_prob
+
+
+def compute_kl_loss(prev_sample_mean, prev_sample_mean_ref, noise_scale_ref):
+    diff_sq = (prev_sample_mean.to(torch.float32) - prev_sample_mean_ref.to(torch.float32)) ** 2
+    reduce_dims = tuple(range(1, diff_sq.ndim))
+    denom = 2.0 * (noise_scale_ref.to(torch.float32) ** 2)
+    denom = torch.clamp(denom, min=1e-20)
+    per_sample = diff_sq.mean(dim=reduce_dims) / denom
+    return per_sample.mean()
+
+@contextmanager
+def disable_lora_adapters(model):
+    if hasattr(model, "disable_adapter") and callable(getattr(model, "disable_adapter")):
+        with model.disable_adapter():
+            yield
+        return
+
+    if hasattr(model, "disable_adapters") and callable(getattr(model, "disable_adapters")):
+        try:
+            maybe_cm = model.disable_adapters()
+        except TypeError:
+            maybe_cm = None
+        if maybe_cm is not None and hasattr(maybe_cm, "__enter__") and hasattr(maybe_cm, "__exit__"):
+            with maybe_cm:
+                yield
+            return
+
+        model.disable_adapters()
+        try:
+            yield
+        finally:
+            if hasattr(model, "enable_adapters") and callable(getattr(model, "enable_adapters")):
+                try:
+                    model.enable_adapters()
+                except TypeError:
+                    pass
+            if hasattr(model, "set_adapter") and callable(getattr(model, "set_adapter")):
+                try:
+                    model.set_adapter("default")
+                except Exception:
+                    pass
+        return
+
+    raise ValueError(
+        "args.kl_beta > 0 requires either a separate ref_transformer "
+        "(set --kl_reference_model_name_or_path) or a model that supports adapter disabling "
+        "(disable_adapter() or disable_adapters())."
+    )
 
 
 
@@ -599,6 +669,7 @@ def sample_reference_model(
                 latents = latents / latents_std + latents_mean
                 video = vae.decode(latents, return_dict=False)[0]
                 decoded_video = video_processor.postprocess_video(video)
+        os.makedirs("videos", exist_ok=True)
         save_path = f"./videos/wan_2_1_{rank}_{index}.mp4"
         export_to_video(decoded_video[0], save_path, fps=16)
 
@@ -656,6 +727,7 @@ def train_one_step(
     args,
     device,
     transformer,
+    ref_transformer,
     vae,
     reward_model,
     clip_model,
@@ -671,6 +743,8 @@ def train_one_step(
     preprocess_val,
 ):
     total_loss = 0.0
+    total_kl_loss = 0.0
+    kl_loss_steps = 0
     optimizer.zero_grad()
     #device = latents.device
     if args.use_group:
@@ -755,7 +829,7 @@ def train_one_step(
                 clip_advantages[start_idx:end_idx] = (group_clip_rewards - group_clip_mean) / group_clip_std
 
         if args.use_unifiedreward_think and args.use_clip:
-            samples["advantages"] = 0.7 * advantages + 1.4 * clip_advantages
+            samples["advantages"] = 0.3 * advantages + 0.7 * clip_advantages
         elif args.use_unifiedreward_think:
             samples["advantages"] = advantages
         elif args.use_clip:
@@ -772,7 +846,7 @@ def train_one_step(
             clip_advantages = (samples["clip_rewards"] - gathered_clip_reward.mean())/(gathered_clip_reward.std()+1e-8)
 
         if args.use_unifiedreward_think and args.use_clip:
-            samples["advantages"] = 0.7 * advantages + 1.4 * clip_advantages
+            samples["advantages"] = 0.3 * advantages + 0.7 * clip_advantages
         elif args.use_unifiedreward_think:
             samples["advantages"] = advantages
         elif args.use_clip:
@@ -803,7 +877,7 @@ def train_one_step(
         for _ in range(train_timesteps):
             clip_range = args.clip_range
             adv_clip_max = args.adv_clip_max
-            new_log_probs = grpo_one_step(
+            new_log_probs, prev_sample_mean, noise_scale, dt = grpo_one_step(
                 args,
                 sample["latents"][:,_],
                 sample["next_latents"][:,_],
@@ -813,6 +887,7 @@ def train_one_step(
                 sample["timesteps"][:,_],
                 perms[i][_],
                 sigma_schedule,
+                return_stats=True,
             )
 
             advantages = torch.clamp(
@@ -829,7 +904,54 @@ def train_one_step(
                 1.0 - clip_range,
                 1.0 + clip_range,
             )
-            loss = torch.mean(torch.maximum(unclipped_loss, clipped_loss)) / (args.gradient_accumulation_steps * train_timesteps)
+            policy_loss = torch.mean(torch.maximum(unclipped_loss, clipped_loss))
+            loss = policy_loss
+
+            kl_loss = None
+            if args.kl_beta > 0:
+                with torch.no_grad():
+                    if ref_transformer is not None:
+                        _, prev_sample_mean_ref, noise_scale_ref, dt_ref = grpo_one_step(
+                            args,
+                            sample["latents"][:, _],
+                            sample["next_latents"][:, _],
+                            sample["encoder_hidden_states"],
+                            sample["negative_prompt_embeds"],
+                            ref_transformer,
+                            sample["timesteps"][:, _],
+                            perms[i][_],
+                            sigma_schedule,
+                            return_stats=True,
+                        )
+                    else:
+                        was_training = transformer.training
+                        transformer.eval()
+                        try:
+                            with disable_lora_adapters(transformer):
+                                _, prev_sample_mean_ref, noise_scale_ref, dt_ref = grpo_one_step(
+                                    args,
+                                    sample["latents"][:, _],
+                                    sample["next_latents"][:, _],
+                                    sample["encoder_hidden_states"],
+                                    sample["negative_prompt_embeds"],
+                                    transformer,
+                                    sample["timesteps"][:, _],
+                                    perms[i][_],
+                                    sigma_schedule,
+                                    return_stats=True,
+                                )
+                        finally:
+                            transformer.train(was_training)
+                kl_loss = compute_kl_loss(prev_sample_mean, prev_sample_mean_ref, noise_scale_ref)
+                loss = loss + args.kl_beta * kl_loss
+
+                kl_loss_to_log = kl_loss.detach()
+                dist.all_reduce(kl_loss_to_log, op=dist.ReduceOp.SUM)
+                kl_loss_to_log = kl_loss_to_log / dist.get_world_size()
+                total_kl_loss += float(kl_loss_to_log.item())
+                kl_loss_steps += 1
+
+            loss = loss / (args.gradient_accumulation_steps * train_timesteps)
 
             loss.backward()
             avg_loss = loss.detach().clone()
@@ -845,9 +967,12 @@ def train_one_step(
             print("clip_reward", sample["clip_rewards"].item())
             print("ratio", ratio)
             print("advantage", sample["advantages"].item())
+            if args.kl_beta > 0 and kl_loss is not None:
+                print("kl_loss", float(kl_loss.detach().item()))
             print("final loss", loss.item())
         dist.barrier()
-    return total_loss, grad_norm.item(), dim_reward
+    mean_kl_loss = total_kl_loss / max(kl_loss_steps, 1)
+    return total_loss, grad_norm.item(), dim_reward, mean_kl_loss
 
 
 def main(args):
@@ -900,7 +1025,6 @@ def main(args):
     ).to(device)
     # Only tune LoRA adapters while freezing WAN base weights.
     transformer.requires_grad_(False)
-
     target_modules=[
         "add_k_proj",
         "add_q_proj",
@@ -911,7 +1035,6 @@ def main(args):
         "to_q",
         "to_v",
     ]
-
     transformer_lora_config = LoraConfig(
         r=args.lora_rank,
         lora_alpha=args.lora_alpha,
@@ -940,7 +1063,17 @@ def main(args):
     main_print(
         f"--> LoRA fine-tuning WAN transformer (FSDP sharding flag: {args.fsdp_sharding_startegy}, not wrapping base model)."
     )
-    # Load the reference model
+    # Load the reference model (no LoRA) for KL regularization.
+    ref_transformer = None
+    if args.kl_beta > 0:
+        if args.kl_reference_model_name_or_path:
+            ref_transformer = WanTransformer3DModel.from_pretrained(
+                args.kl_reference_model_name_or_path,
+                subfolder="transformer",
+                torch_dtype=torch.bfloat16,
+            ).to(device)
+            ref_transformer.requires_grad_(False)
+            ref_transformer.eval()
     main_print(f"--> model loaded")
 
     # Set model as trainable.
@@ -999,7 +1132,7 @@ def main(args):
     #vae.enable_tiling()
 
     if rank <= 0:
-        project = "pref_wan_2_1_lora"
+        project = "prefgrpo_wan_2_1_lora"
         wandb.init(project=project, config=args, name=args.exp_name)
 
     # Train!
@@ -1074,10 +1207,11 @@ def main(args):
                 )
                 dist.barrier()
 
-            loss, grad_norm, dim_reward = train_one_step(
+            loss, grad_norm, dim_reward, kl_loss = train_one_step(
                 args,
                 device, 
                 transformer,
+                ref_transformer,
                 vae,
                 reward_model,
                 clip_model,
@@ -1113,6 +1247,8 @@ def main(args):
                 wandb.log(
                     {
                         "train_loss": loss,
+                        "kl_loss": kl_loss,
+                        "kl_beta": args.kl_beta,
                         "learning_rate": lr_scheduler.get_last_lr()[0],
                         "step_time": step_time,
                         "avg_step_time": avg_step_time,
@@ -1438,6 +1574,18 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--lora_rank", type=int, default=128, help="LoRA rank parameter."
+    )
+    parser.add_argument(
+        "--kl_beta",
+        type=float,
+        default=0.0,
+        help="KL loss coefficient (set > 0 to enable KL regularization against a frozen reference model).",
+    )
+    parser.add_argument(
+        "--kl_reference_model_name_or_path",
+        type=str,
+        default=None,
+        help="Optional reference model path for KL regularization; if not set, will try to use transformer.disable_adapter() as the reference.",
     )
     parser.add_argument(
         "--resume_from_lora_checkpoint",
