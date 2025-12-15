@@ -10,16 +10,12 @@
 # This modified file is released under the same license.
 
 import argparse
-import math
 import os
 from fastvideo.utils.parallel_states import (
     initialize_sequence_parallel_state,
     destroy_sequence_parallel_group,
     get_sequence_parallel_state,
-    nccl_info,
 )
-from typing import Optional, Union, List
-from fastvideo.utils.validation import log_validation
 import time
 from torch.utils.data import DataLoader
 import torch
@@ -28,10 +24,9 @@ from torch.utils.data.distributed import DistributedSampler
 import wandb
 from accelerate.utils import set_seed
 from tqdm.auto import tqdm
-from fastvideo.utils.fsdp_util import get_dit_fsdp_kwargs, apply_fsdp_checkpointing
+from fastvideo.utils.fsdp_util import apply_fsdp_checkpointing
 from diffusers.optimization import get_scheduler
 from diffusers.utils import check_min_version
-from diffusers.utils.torch_utils import randn_tensor
 from fastvideo.dataset.latent_wan_2_1_rl_datasets import LatentDataset, latent_collate_function
 import torch.distributed as dist
 from fastvideo.utils.logging_ import main_print
@@ -39,143 +34,89 @@ import cv2
 
 # Will error if the minimal version of diffusers is not installed. Remove at your own risks.
 check_min_version("0.31.0")
-import time
 from collections import deque
 import numpy as np
-from einops import rearrange
-import torch.distributed as dist
 from torch.nn import functional as F
-from typing import List
 from PIL import Image
 from diffusers import AutoencoderKLWan, WanTransformer3DModel
 from diffusers.models.transformers.transformer_wan import WanTransformerBlock
 from contextlib import contextmanager
 from safetensors.torch import save_file
+from peft import LoraConfig, get_peft_model_state_dict, set_peft_model_state_dict
 from diffusers.video_processor import VideoProcessor
 from diffusers.utils import export_to_video
-from vllm_utils.vllm_request import evaluate_batch
 import json
-import re
-import itertools
-from collections import defaultdict
-from io import BytesIO
-import base64
+from fastvideo.rewards.unifiedreward_think import cal_win_rate_videos
+from fastvideo.grpo.steps import dance_grpo_step, flow_grpo_step, sd3_time_shift
 
-def _encode_image(image):
-
-    image = image.convert("RGB")
-    buffered = BytesIO()
-    image.save(buffered, format="JPEG", quality=95)
-    return base64.b64encode(buffered.getvalue()).decode("utf-8")
-
-def extract_frames(video_path: str, num_frames: int = 8):
-    cap = cv2.VideoCapture(video_path)
-    if not cap.isOpened():
-        raise RuntimeError(f"Cannot open video: {video_path}")
-
-    frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    if frame_count == 0:
-        cap.release()
-        return []
-
-    num_frames = min(num_frames, frame_count)
-    indices = np.linspace(0, frame_count - 1, num_frames, dtype=int)
-
-    frames = []
-    for idx in indices:
-        cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
-        ret, frame = cap.read()
-        if not ret:
-            break
-        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        frames.append(Image.fromarray(frame))
-
-    cap.release()
-    return frames
-
-
-def extract_answer(text):
-    final_match = re.search(r'<answer>(.*?)</answer>', text, re.DOTALL)
-    final_conclusion = final_match.group(1).strip() if final_match else None
-    return final_conclusion
-
-def cal_win_rate(all_input_data, args):
-    videos = [
-        extract_frames(data['videos'], num_frames=8)  
-        for data in all_input_data
-    ]
-
-    pairs = list(itertools.combinations(enumerate(videos), 2))
-    problem = all_input_data[0]['problem']
-    payload = [
-        {
-            "images": [_encode_image(frame) for frame in frames1 + frames2],  
-            "problem": problem,
-            "first_index": idx1,
-            "second_index": idx2,
-        }
-        for (idx1, frames1), (idx2, frames2) in pairs
-    ]
-
-    all_response = evaluate_batch(payload, api_url=args.api_url)
     
-    win_count = {
-        "overall": defaultdict(int) 
-    }
-    compare_count = {
-        "overall": defaultdict(int)
-    }
-
-    for result in all_response:
-        idx1 = result["first_index"]
-        idx2 = result["second_index"]
-
-        compare_count["overall"][idx1] += 1
-        compare_count["overall"][idx2] += 1
-
-        output = result["model_output"]
-        print(output)
-
-        final_conclusion = extract_answer(output)
-        
-    
-        if final_conclusion:
-            if "Video 1 is better" in final_conclusion:
-                win_count["overall"][idx1] += 1
-            elif "Video 2 is better" in final_conclusion:
-                win_count["overall"][idx2] += 1
-            else:
-                win_count["overall"][idx1] += 0.5
-                win_count["overall"][idx2] += 0.5
-                print(result["model_output"])
-                print('wrong API output!')
-        else:
-            win_count["overall"][idx1] += 0.5
-            win_count["overall"][idx2] += 0.5
-            print(result["model_output"])
-            print('wrong API output!')
-    
-    overall_win_rate = [
-        torch.tensor(round(win_count["overall"][idx] / compare_count["overall"][idx], 3), 
-            device="cuda").unsqueeze(0)
-            if compare_count["overall"][idx] > 0 else 0.0
-        for idx in range(len(videos))
-    ]
-
-    dim_win_rates = {}
-    for dimension in ["overall"]:
-        dim_win_rates[dimension] = [
-            round(win_count[dimension].get(idx, 0) / max(compare_count[dimension].get(idx, 1), 1), 3)
-            for idx in range(len(videos))
-        ]
-
-    dim_reward = {
-        'overall_reward': dim_win_rates["overall"]
-    }
-
-    return overall_win_rate, dim_reward
 
 template = "Given a caption and two videos generated based on this caption, please analyze in detail the two provided videos. Evaluate them on various dimensions such as semantic consistency (how closely the video content aligns with the caption), temporal coherence (smoothness and logical flow of motion across frames), authenticity (realism and attention to detail), and any other factors you deem relevant. For each evaluation dimension, provide a score between 1-10 for both videos (e.g., Video 1: 8/10, Video 2: 6/10) and provide a concise rationale for the score. Calculate the total score for each video by summing all dimension scores. Use a chain-of-thought process to detail your reasoning steps, and enclose all your detailed reasoning within <think> and </think> tags. Then, in the <answer> tag, output exactly one of the following strings: 'Video 1 is better' or 'Video 2 is better' based on the total scores. No additional text is allowed in the <answer> section.\n\nExample output format:\n<think>\n1. Semantic consistency: Video 1 (9/10) - ...; Video 2 (7/10) - ...\n2. Temporal coherence: Video 1 (8/10) - ...; Video 2 (6/10) - ...\n3. Authenticity: Video 1 (7/10) - ...; Video 2 (5/10) - ...\n[Additional dimensions if any]: Video 2 (8/10) - ...; Video 1 (6/10) - ...\nTotal score:\nVideo 1: 9+8+7+6=30\nVideo 2: 7+6+5+8=26\n</think>\n<answer>Video 1 is better</answer>\n**Note: In the example above, scores and the final answer are placeholders meant only to demonstrate the format. Your actual evaluation should be based on the quality of two given videos.**\n\nYour task is provided as follows:\nText Caption: [{prompt}]"
+
+
+def save_wan_lora_checkpoint(transformer, optimizer, pipeline, output_dir, step, epoch, rank):
+    if rank > 0:
+        return
+
+    save_dir = os.path.join(output_dir, f"lora-checkpoint-{step}-{epoch}")
+    os.makedirs(save_dir, exist_ok=True)
+
+    optim_path = os.path.join(save_dir, "lora_optimizer.pt")
+    torch.save({"optimizer": optimizer.state_dict(), "step": step}, optim_path)
+
+    transformer_lora_layers = get_peft_model_state_dict(transformer)
+    pipeline.save_lora_weights(
+        save_directory=save_dir,
+        transformer_lora_layers=transformer_lora_layers,
+        is_main_process=True,
+    )
+    lora_config = {
+        "step": step,
+        "lora_params": {
+            "lora_rank": transformer.config.lora_rank,
+            "lora_alpha": transformer.config.lora_alpha,
+            "target_modules": transformer.config.lora_target_modules,
+        },
+    }
+    config_path = os.path.join(save_dir, "lora_config.json")
+    with open(config_path, "w") as f:
+        json.dump(lora_config, f, indent=4)
+    main_print(f"--> LoRA checkpoint saved at step {step}")
+
+
+def load_wan_lora_weights(transformer, pipeline, checkpoint_dir):
+    lora_state_dict = pipeline.lora_state_dict(checkpoint_dir)
+    transformer_state_dict = {
+        f'{k.replace("transformer.", "")}': v
+        for k, v in lora_state_dict.items()
+        if k.startswith("transformer.")
+    }
+    from diffusers.utils import convert_unet_state_dict_to_peft
+
+    transformer_state_dict = convert_unet_state_dict_to_peft(transformer_state_dict)
+    incompatible_keys = set_peft_model_state_dict(
+        transformer, transformer_state_dict, adapter_name="default"
+    )
+    if incompatible_keys is not None:
+        unexpected_keys = getattr(incompatible_keys, "unexpected_keys", None)
+        if unexpected_keys:
+            main_print(
+                "Loading adapter weights from state_dict led to unexpected keys not found in the model: "
+                f"{unexpected_keys}."
+            )
+
+
+def resume_wan_lora_optimizer(optimizer, checkpoint_dir):
+    optim_path = os.path.join(checkpoint_dir, "lora_optimizer.pt")
+    if not os.path.exists(optim_path):
+        return optimizer, 0
+
+    optim_state = torch.load(optim_path, weights_only=False)
+    step = optim_state.get("step", 0)
+    state_dict = optim_state.get("optimizer", optim_state)
+    optimizer.load_state_dict(state_dict)
+    main_print(f"--> Successfully resumed LoRA optimizer from step {step}")
+    return optimizer, step
 
 
 def video_first_frame_to_pil(video_path):
@@ -198,96 +139,6 @@ def video_first_frame_to_pil(video_path):
 
     return pil_image
 
-
-
-def sd3_time_shift(shift, t):
-    return (shift * t) / (1 + (shift - 1) * t)
-    
-
-def flow_grpo_step(
-    model_output: torch.Tensor,
-    latents: torch.Tensor,
-    eta: float,
-    sigmas: torch.Tensor,
-    index: int,
-    prev_sample: torch.Tensor,
-    generator: Optional[torch.Generator] = None,
-):
-    device = model_output.device
-
-    sigma = sigmas[index].to(device)
-    sigma_prev = sigmas[index + 1].to(device)
-    sigma_max = sigmas[1].item()
-    dt = sigma_prev - sigma # neg dt
-
-    pred_original_sample = latents - sigma * model_output
- 
-    std_dev_t = torch.sqrt(sigma / (1 - torch.where(sigma == 1, sigma_max, sigma))) * eta
-    
-    prev_sample_mean = latents*(1+std_dev_t**2/(2*sigma)*dt)+model_output*(1+std_dev_t**2*(1-sigma)/(2*sigma))*dt
-    
-    if prev_sample is None:
-        variance_noise = randn_tensor(
-            model_output.shape, 
-            generator=generator, 
-            device=device, 
-            dtype=model_output.dtype
-        )
-        prev_sample = prev_sample_mean + std_dev_t * torch.sqrt(-1*dt) * variance_noise
-    
-    
-    log_prob = (
-        -((prev_sample.detach() - prev_sample_mean) ** 2) / (2 * ((std_dev_t * torch.sqrt(-1*dt))**2))
-        - torch.log(std_dev_t * torch.sqrt(-1*dt))
-        - torch.log(torch.sqrt(2 * torch.as_tensor(math.pi)))
-    )
-
-    # mean along all but batch dimension
-    log_prob = log_prob.mean(dim=tuple(range(1, log_prob.ndim)))
-
-    return prev_sample, pred_original_sample, log_prob
-
-
-def dance_grpo_step(
-    model_output: torch.Tensor,
-    latents: torch.Tensor,
-    eta: float,
-    sigmas: torch.Tensor,
-    index: int,
-    prev_sample: torch.Tensor,
-    grpo: bool,
-    sde_solver: bool,
-):
-    sigma = sigmas[index]
-    dsigma = sigmas[index + 1] - sigma
-    prev_sample_mean = latents + dsigma * model_output
-
-    pred_original_sample = latents - sigma * model_output
-
-    delta_t = sigma - sigmas[index + 1]
-    std_dev_t = eta * math.sqrt(delta_t)
-
-    if sde_solver:
-        score_estimate = -(latents-pred_original_sample*(1 - sigma))/sigma**2
-        log_term = -0.5 * eta**2 * score_estimate
-        prev_sample_mean = prev_sample_mean + log_term * dsigma
-
-    if grpo and prev_sample is None:
-        prev_sample = prev_sample_mean + torch.randn_like(prev_sample_mean) * std_dev_t 
-        
-
-    if grpo:
-        # log prob of prev_sample given prev_sample_mean and std_dev_t
-        log_prob = (
-            -((prev_sample.detach().to(torch.float32) - prev_sample_mean.to(torch.float32)) ** 2) / (2 * (std_dev_t**2))
-        )
-        - math.log(std_dev_t)- torch.log(torch.sqrt(2 * torch.as_tensor(math.pi)))
-
-        # mean along all but batch dimension
-        log_prob = log_prob.mean(dim=tuple(range(1, log_prob.ndim)))
-        return prev_sample, pred_original_sample, log_prob
-    else:
-        return prev_sample_mean,pred_original_sample
 
 
 
@@ -399,6 +250,7 @@ def grpo_one_step(
             timesteps,
             i,
             sigma_schedule,
+            return_stats: bool = False,
 ):
     B = encoder_hidden_states.shape[0]
     transformer.train()
@@ -424,18 +276,72 @@ def grpo_one_step(
             )[0]
             
     if args.grpo_step_mode == 'dance': 
-        z, pred_original, log_prob = dance_grpo_step(pred, latents.to(torch.float32), args.eta, sigma_schedule, i, prev_sample=pre_latents.to(torch.float32), grpo=True, sde_solver=True)
+        z, pred_original, log_prob, prev_sample_mean, noise_scale, dt = dance_grpo_step(
+            pred,
+            latents.to(torch.float32),
+            args.eta,
+            sigma_schedule,
+            i,
+            prev_sample=pre_latents.to(torch.float32),
+            grpo=True,
+            sde_solver=True,
+            return_stats=True,
+        )
     elif args.grpo_step_mode == 'flow': 
-        z, pred_original, log_prob = flow_grpo_step(
+        z, pred_original, log_prob, prev_sample_mean, noise_scale, dt = flow_grpo_step(
             model_output=pred,
             latents=latents.to(torch.float32),
             eta=args.eta,
             sigmas=sigma_schedule,
             index=i,
             prev_sample=pre_latents.to(torch.float32),
-        )    
-    
+            return_stats=True,
+        )
+
+    if return_stats:
+        return log_prob, prev_sample_mean, noise_scale, dt
     return log_prob
+
+
+def compute_kl_loss(prev_sample_mean, prev_sample_mean_ref, noise_scale_ref):
+    diff_sq = (prev_sample_mean.to(torch.float32) - prev_sample_mean_ref.to(torch.float32)) ** 2
+    reduce_dims = tuple(range(1, diff_sq.ndim))
+    denom = 2.0 * (noise_scale_ref.to(torch.float32) ** 2)
+    denom = torch.clamp(denom, min=1e-20)
+    per_sample = diff_sq.mean(dim=reduce_dims) / denom
+    return per_sample.mean()
+
+
+@contextmanager
+def disable_lora_adapters(model):
+    if hasattr(model, "disable_adapter") and callable(getattr(model, "disable_adapter")):
+        with model.disable_adapter():
+            yield
+        return
+
+    if hasattr(model, "disable_adapters") and callable(getattr(model, "disable_adapters")):
+        try:
+            maybe_cm = model.disable_adapters()
+        except TypeError:
+            maybe_cm = None
+        if maybe_cm is not None and hasattr(maybe_cm, "__enter__") and hasattr(maybe_cm, "__exit__"):
+            with maybe_cm:
+                yield
+            return
+
+        # Imperative toggle path.
+        try:
+            model.disable_adapters()
+            yield
+        finally:
+            try:
+                if hasattr(model, "enable_adapters"):
+                    model.enable_adapters()
+            except Exception:
+                pass
+        return
+
+    yield
 
 
 
@@ -559,7 +465,9 @@ def sample_reference_model(
     if args.use_unifiedreward_think:
         with torch.no_grad():
             with torch.amp.autocast('cuda'):
-                all_rewards, dim_reward = cal_win_rate(all_input_data, args)
+                all_rewards, dim_reward = cal_win_rate_videos(
+                    all_input_data, api_url=args.api_url
+                )
     
     all_latents = torch.cat(all_latents, dim=0)
     all_log_probs = torch.cat(all_log_probs, dim=0)
@@ -590,6 +498,7 @@ def train_one_step(
     args,
     device,
     transformer,
+    ref_transformer,
     vae,
     reward_model,
     clip_model,
@@ -605,6 +514,8 @@ def train_one_step(
     preprocess_val,
 ):
     total_loss = 0.0
+    total_kl_loss = 0.0
+    kl_loss_steps = 0
     optimizer.zero_grad()
     #device = latents.device
     if args.use_group:
@@ -737,17 +648,31 @@ def train_one_step(
         for _ in range(train_timesteps):
             clip_range = args.clip_range
             adv_clip_max = args.adv_clip_max
-            new_log_probs = grpo_one_step(
-                args,
-                sample["latents"][:,_],
-                sample["next_latents"][:,_],
-                sample["encoder_hidden_states"],
-                sample["negative_prompt_embeds"],
-                transformer,
-                sample["timesteps"][:,_],
-                perms[i][_],
-                sigma_schedule,
-            )
+            if args.kl_beta > 0:
+                new_log_probs, prev_sample_mean, noise_scale, dt = grpo_one_step(
+                    args,
+                    sample["latents"][:, _],
+                    sample["next_latents"][:, _],
+                    sample["encoder_hidden_states"],
+                    sample["negative_prompt_embeds"],
+                    transformer,
+                    sample["timesteps"][:, _],
+                    perms[i][_],
+                    sigma_schedule,
+                    return_stats=True,
+                )
+            else:
+                new_log_probs = grpo_one_step(
+                    args,
+                    sample["latents"][:, _],
+                    sample["next_latents"][:, _],
+                    sample["encoder_hidden_states"],
+                    sample["negative_prompt_embeds"],
+                    transformer,
+                    sample["timesteps"][:, _],
+                    perms[i][_],
+                    sigma_schedule,
+                )
 
             advantages = torch.clamp(
                 sample["advantages"],
@@ -763,7 +688,57 @@ def train_one_step(
                 1.0 - clip_range,
                 1.0 + clip_range,
             )
-            loss = torch.mean(torch.maximum(unclipped_loss, clipped_loss)) / (args.gradient_accumulation_steps * train_timesteps)
+            policy_loss = torch.mean(torch.maximum(unclipped_loss, clipped_loss))
+            loss = policy_loss
+
+            kl_loss = None
+            if args.kl_beta > 0:
+                with torch.no_grad():
+                    if ref_transformer is not None:
+                        _, prev_sample_mean_ref, noise_scale_ref, dt_ref = grpo_one_step(
+                            args,
+                            sample["latents"][:, _],
+                            sample["next_latents"][:, _],
+                            sample["encoder_hidden_states"],
+                            sample["negative_prompt_embeds"],
+                            ref_transformer,
+                            sample["timesteps"][:, _],
+                            perms[i][_],
+                            sigma_schedule,
+                            return_stats=True,
+                        )
+                    else:
+                        was_training = transformer.training
+                        transformer.eval()
+                        try:
+                            with disable_lora_adapters(transformer):
+                                _, prev_sample_mean_ref, noise_scale_ref, dt_ref = grpo_one_step(
+                                    args,
+                                    sample["latents"][:, _],
+                                    sample["next_latents"][:, _],
+                                    sample["encoder_hidden_states"],
+                                    sample["negative_prompt_embeds"],
+                                    transformer,
+                                    sample["timesteps"][:, _],
+                                    perms[i][_],
+                                    sigma_schedule,
+                                    return_stats=True,
+                                )
+                        finally:
+                            transformer.train(was_training)
+
+                kl_loss = compute_kl_loss(
+                    prev_sample_mean, prev_sample_mean_ref, noise_scale_ref
+                )
+                loss = loss + args.kl_beta * kl_loss
+
+                kl_loss_to_log = kl_loss.detach()
+                dist.all_reduce(kl_loss_to_log, op=dist.ReduceOp.SUM)
+                kl_loss_to_log = kl_loss_to_log / dist.get_world_size()
+                total_kl_loss += float(kl_loss_to_log.item())
+                kl_loss_steps += 1
+
+            loss = loss / (args.gradient_accumulation_steps * train_timesteps)
 
             loss.backward()
             avg_loss = loss.detach().clone()
@@ -779,9 +754,12 @@ def train_one_step(
             print("clip_reward", sample["clip_rewards"].item())
             print("ratio", ratio)
             print("advantage", sample["advantages"].item())
+            if args.kl_beta > 0 and kl_loss is not None:
+                print("kl_loss", float(kl_loss.detach().item()))
             print("final loss", loss.item())
         dist.barrier()
-    return total_loss, grad_norm.item(), dim_reward
+    mean_kl_loss = total_kl_loss / max(kl_loss_steps, 1)
+    return total_loss, grad_norm.item(), dim_reward, mean_kl_loss
 
 
 def main(args):
@@ -814,8 +792,6 @@ def main(args):
     preprocess_val=None
     if args.use_clip:
         import open_clip
-        from typing import Union
-        import huggingface_hub
         clip_model, _, preprocess_dgn5b = open_clip.create_model_and_transforms('ViT-H-14', 
             pretrained='./open_clip_pytorch_model.bin')
         
@@ -833,6 +809,26 @@ def main(args):
             torch_dtype = torch.bfloat16
     ).to(device)
 
+    pipe = None
+    if getattr(args, "use_lora", False):
+        from diffusers import WanPipeline
+
+        pipe = WanPipeline
+        transformer.requires_grad_(False)
+        transformer_lora_config = LoraConfig(
+            r=args.lora_rank,
+            lora_alpha=args.lora_alpha,
+            init_lora_weights=True,
+            target_modules=["to_k", "to_q", "to_v", "to_out.0"],
+        )
+        transformer.add_adapter(transformer_lora_config)
+        transformer.config.lora_rank = args.lora_rank
+        transformer.config.lora_alpha = args.lora_alpha
+        transformer.config.lora_target_modules = ["to_k", "to_q", "to_v", "to_out.0"]
+
+        if args.resume_from_lora_checkpoint:
+            load_wan_lora_weights(transformer, pipe, args.resume_from_lora_checkpoint)
+
     if args.gradient_checkpointing:
         apply_fsdp_checkpointing(
             transformer, (WanTransformerBlock), args.selective_checkpointing
@@ -848,7 +844,23 @@ def main(args):
     main_print(
         f"--> Initializing FSDP with sharding strategy: {args.fsdp_sharding_startegy}"
     )
-    # Load the reference model
+    # Load the reference model (optional, for KL regularization)
+    ref_transformer = None
+    if getattr(args, "kl_beta", 0.0) > 0:
+        if args.kl_reference_model_name_or_path:
+            ref_transformer = WanTransformer3DModel.from_pretrained(
+                args.kl_reference_model_name_or_path,
+                subfolder="transformer",
+                torch_dtype=torch.bfloat16,
+            ).to(device)
+            ref_transformer.requires_grad_(False)
+            ref_transformer.eval()
+        else:
+            assert getattr(args, "use_lora", False), (
+                "args.kl_beta > 0 requires either a separate ref_transformer "
+                "(set --kl_reference_model_name_or_path) or a model that supports adapter disabling "
+                "(enable --use_lora)."
+            )
     main_print(f"--> model loaded")
 
     # Set model as trainable.
@@ -869,6 +881,11 @@ def main(args):
 
     init_steps = 0
     main_print(f"optimizer: {optimizer}")
+
+    if getattr(args, "use_lora", False) and args.resume_from_lora_checkpoint:
+        optimizer, init_steps = resume_wan_lora_optimizer(
+            optimizer, args.resume_from_lora_checkpoint
+        )
 
     train_dataset = LatentDataset(args.data_json_path, args.num_latent_t, args.cfg)
     sampler = DistributedSampler(
@@ -904,7 +921,9 @@ def main(args):
     #vae.enable_tiling()
 
     if rank <= 0:
-        project = "pref_wan_2_1"
+        project = (
+            "prefgrpo_wan_2_1_lora" if getattr(args, "use_lora", False) else "pref_wan_2_1"
+        )
         wandb.init(project=project, config=args, name=args.exp_name)
 
     # Train!
@@ -951,50 +970,62 @@ def main(args):
         if isinstance(sampler, DistributedSampler):
             sampler.set_epoch(epoch) # Crucial for distributed shuffling per epoch       
         if epoch > 0:
-            cpu_state = transformer.state_dict()
-            if rank <= 0:
-                save_dir = os.path.join(args.output_dir, f"checkpoint-{step}-{epoch}")
-                os.makedirs(save_dir, exist_ok=True)
-                # save using safetensors
-                weight_path = os.path.join(save_dir,
-                                        "diffusion_pytorch_model.safetensors")
-                save_file(cpu_state, weight_path)
-                config_dict = dict(transformer.config)
-                if "dtype" in config_dict:
-                    del config_dict["dtype"]  # TODO
-                config_path = os.path.join(save_dir, "config.json")
-                # save dict as json
-                with open(config_path, "w") as f:
-                    json.dump(config_dict, f, indent=4)
-            main_print(f"--> checkpoint saved at step {step}")
+            epoch_step = epoch * step_per_epoch
+            if getattr(args, "use_lora", False):
+                save_wan_lora_checkpoint(
+                    transformer,
+                    optimizer,
+                    pipe,
+                    args.output_dir,
+                    epoch_step,
+                    epoch - 1,
+                    rank,
+                )
+            else:
+                cpu_state = transformer.state_dict()
+                if rank <= 0:
+                    save_dir = os.path.join(args.output_dir, f"checkpoint-{epoch_step}-{epoch-1}")
+                    os.makedirs(save_dir, exist_ok=True)
+                    weight_path = os.path.join(save_dir, "diffusion_pytorch_model.safetensors")
+                    save_file(cpu_state, weight_path)
+                    config_dict = dict(transformer.config)
+                    if "dtype" in config_dict:
+                        del config_dict["dtype"]
+                    config_path = os.path.join(save_dir, "config.json")
+                    with open(config_path, "w") as f:
+                        json.dump(config_dict, f, indent=4)
+                main_print(f"--> checkpoint saved at step {epoch_step}")
             dist.barrier()
         for step, (prompt_embeds, negative_prompt_embeds, caption) in enumerate(train_dataloader):
             prompt_embeds = prompt_embeds.to(device)
             negative_prompt_embeds = negative_prompt_embeds.to(device)
             start_time = time.time()
             if (step-1) % args.checkpointing_steps == 0 and step!=1:
-                cpu_state = transformer.state_dict()
-                if rank <= 0:
-                    save_dir = os.path.join(args.output_dir, f"checkpoint-{step}-{epoch}")
-                    os.makedirs(save_dir, exist_ok=True)
-                    # save using safetensors
-                    weight_path = os.path.join(save_dir,
-                                            "diffusion_pytorch_model.safetensors")
-                    save_file(cpu_state, weight_path)
-                    config_dict = dict(transformer.config)
-                    if "dtype" in config_dict:
-                        del config_dict["dtype"]  # TODO
-                    config_path = os.path.join(save_dir, "config.json")
-                    # save dict as json
-                    with open(config_path, "w") as f:
-                        json.dump(config_dict, f, indent=4)
-                main_print(f"--> checkpoint saved at step {step}")
+                if getattr(args, "use_lora", False):
+                    save_wan_lora_checkpoint(
+                        transformer, optimizer, pipe, args.output_dir, step, epoch, rank
+                    )
+                else:
+                    cpu_state = transformer.state_dict()
+                    if rank <= 0:
+                        save_dir = os.path.join(args.output_dir, f"checkpoint-{step}-{epoch}")
+                        os.makedirs(save_dir, exist_ok=True)
+                        weight_path = os.path.join(save_dir, "diffusion_pytorch_model.safetensors")
+                        save_file(cpu_state, weight_path)
+                        config_dict = dict(transformer.config)
+                        if "dtype" in config_dict:
+                            del config_dict["dtype"]
+                        config_path = os.path.join(save_dir, "config.json")
+                        with open(config_path, "w") as f:
+                            json.dump(config_dict, f, indent=4)
+                    main_print(f"--> checkpoint saved at step {step}")
                 dist.barrier()
 
-            loss, grad_norm, dim_reward = train_one_step(
+            loss, grad_norm, dim_reward, mean_kl_loss = train_one_step(
                 args,
                 device, 
                 transformer,
+                ref_transformer,
                 vae,
                 reward_model,
                 clip_model,
@@ -1035,6 +1066,8 @@ def main(args):
                         "step_time": step_time,
                         "avg_step_time": avg_step_time,
                         "grad_norm": grad_norm,
+                        "kl_loss": mean_kl_loss,
+                        "kl_beta": getattr(args, "kl_beta", 0.0),
                         **dim_reward_log
                     },
                     step=global_step,
@@ -1046,7 +1079,7 @@ def main(args):
         destroy_sequence_parallel_group()
 
 
-if __name__ == "__main__":
+def build_parser():
     parser = argparse.ArgumentParser()
     # dataset & dataloader
     parser.add_argument("--data_json_path", type=str, required=True)
@@ -1112,6 +1145,36 @@ if __name__ == "__main__":
             "Whether training should be resumed from a previous checkpoint. Use a path saved by"
             ' `--checkpointing_steps`, or `"latest"` to automatically select the last available checkpoint.'
         ),
+    )
+    parser.add_argument(
+        "--use_lora",
+        action="store_true",
+        default=False,
+        help="Enable LoRA fine-tuning (train adapters only).",
+    )
+    parser.add_argument(
+        "--lora_alpha", type=int, default=256, help="Alpha parameter for LoRA."
+    )
+    parser.add_argument(
+        "--lora_rank", type=int, default=128, help="LoRA rank parameter."
+    )
+    parser.add_argument(
+        "--kl_beta",
+        type=float,
+        default=0.0,
+        help="KL loss coefficient (set > 0 to enable KL regularization against a frozen reference model).",
+    )
+    parser.add_argument(
+        "--kl_reference_model_name_or_path",
+        type=str,
+        default=None,
+        help="Optional reference model path for KL regularization; if not set, will try to use transformer.disable_adapter() as the reference.",
+    )
+    parser.add_argument(
+        "--resume_from_lora_checkpoint",
+        type=str,
+        default=None,
+        help="Resume WAN LoRA training from a previous checkpoint directory.",
     )
     parser.add_argument(
         "--logging_dir",
@@ -1365,5 +1428,9 @@ if __name__ == "__main__":
     )
 
 
-    args = parser.parse_args()
+    return parser
+
+
+if __name__ == "__main__":
+    args = build_parser().parse_args()
     main(args)

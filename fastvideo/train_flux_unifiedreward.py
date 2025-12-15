@@ -10,18 +10,13 @@
 # This modified file is released under the same license.
 
 import argparse
-import math
 import os
-from pathlib import Path
 from fastvideo.utils.parallel_states import (
     initialize_sequence_parallel_state,
     destroy_sequence_parallel_group,
     get_sequence_parallel_state,
-    nccl_info,
 )
-from typing import Optional, Union, List
 from fastvideo.utils.communications_flux import sp_parallel_dataloader_wrapper
-from fastvideo.utils.validation import log_validation
 import time
 from torch.utils.data import DataLoader
 import torch
@@ -29,195 +24,57 @@ from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 import datetime
 
 from torch.utils.data.distributed import DistributedSampler
-from fastvideo.utils.dataset_utils import LengthGroupedSampler
 import wandb
 from accelerate.utils import set_seed
 from tqdm.auto import tqdm
 from fastvideo.utils.fsdp_util import get_dit_fsdp_kwargs, apply_fsdp_checkpointing
-from fastvideo.utils.load import load_transformer
 from diffusers.optimization import get_scheduler
 from diffusers.utils import check_min_version
-from diffusers.utils.torch_utils import randn_tensor
 from fastvideo.dataset.latent_flux_rl_datasets import LatentDataset, latent_collate_function
 import torch.distributed as dist
-from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from fastvideo.utils.checkpoint import (
     save_checkpoint,
     save_lora_checkpoint,
+    resume_lora_optimizer,
 )
 from fastvideo.utils.logging_ import main_print
-import cv2
 from diffusers.image_processor import VaeImageProcessor
 
 # Will error if the minimal version of diffusers is not installed. Remove at your own risks.
 check_min_version("0.31.0")
-import time
 from collections import deque
 import numpy as np
-from einops import rearrange
-import torch.distributed as dist
-from torch.nn import functional as F
-from typing import List
-from PIL import Image
 from diffusers import FluxTransformer2DModel, AutoencoderKL
-import re
 from vllm_utils.vllm_request import evaluate_batch
-import itertools
-from collections import defaultdict
+from fastvideo.rewards.unifiedreward import extract_normalized_rewards
+from fastvideo.grpo.kl import compute_kl_loss, disable_lora_adapters
+from fastvideo.grpo.steps import dance_grpo_step, flow_grpo_step, sd3_time_shift
 
-def extract_normalized_rewards(sample_list):
-    pattern = r"(\w+) Score \(1-5\):\s*([0-5](?:\.\d+)?)"
-
-    all_scores = []
-    for response in sample_list:
-        matches = re.findall(pattern, response)
-        scores = {key: float(value) for key, value in matches}
-        if 'Coherence' in scores:
-            del scores['Coherence']
-        all_scores.append(scores)
-
-    if not all_scores:
-        return []
-
-    keys = set()
-    for s in all_scores:
-        keys.update(s.keys())
-    keys = sorted(keys) 
-
-    dim_scores_raw = {k: [s[k] for s in all_scores if k in s] for k in keys}
-    dim_means = {k: np.mean(v) if len(v) > 0 else 0.0 for k, v in dim_scores_raw.items()}
-
-
-    alignment_scores = []
-    style_scores = []
-    log_alignment_scores = []
-    log_style_scores = []
-
-    for s in all_scores:
-        alignment_score = s.get("Alignment", dim_means['Alignment'])
-        style_score = s.get("Style", dim_means['Style'])
-        
-        alignment_scores.append(torch.tensor(alignment_score, device="cuda").unsqueeze(0))
-        style_scores.append(torch.tensor(style_score, device="cuda").unsqueeze(0))
-        
-        log_alignment_scores.append(alignment_score)
-        log_style_scores.append(style_score)
-
-    dim_array = {
-        'Alignment': log_alignment_scores, 
-        'Style': log_style_scores
-    }
-
-    return alignment_scores, style_scores, dim_array
+def _parse_lora_target_modules(arg, default):
+    if arg is None:
+        return list(default)
+    items = [s.strip() for s in str(arg).split(",")]
+    items = [s for s in items if s]
+    return items if items else list(default)
 
 template = (
-                            "You are presented with a generated image and its associated text caption. Your task is to analyze the image across multiple dimensions in relation to the caption. Specifically:\n\n"
-                            "1. Evaluate each word in the caption based on how well it is visually represented in the image. Assign a numerical score to each word using the format:\n"
-                            "   Word-wise Scores: [[\"word1\", score1], [\"word2\", score2], ..., [\"wordN\", scoreN], [\"[No_mistakes]\", scoreM]]\n"
-                            "   - A higher score indicates that the word is less well represented in the image.\n"
-                            "   - The special token [No_mistakes] represents whether all elements in the caption were correctly depicted. A high score suggests no mistakes; a low score suggests missing or incorrect elements.\n\n"
-                            "2. Provide overall assessments for the image along the following axes (each rated from 1 to 5):\n"
-                            "- Alignment Score: How well the image matches the caption in terms of content.\n"
-                            "- Coherence Score: How logically consistent the image is (absence of visual glitches, object distortions, etc.).\n"
-                            "- Style Score: How aesthetically appealing the image looks, regardless of caption accuracy.\n\n"
-                            "Output your evaluation using the format below:\n\n"
-                            "---\n\n"
-                            "Word-wise Scores: [[\"word1\", score1], ..., [\"[No_mistakes]\", scoreM]]\n\n"
-                            "Alignment Score (1-5): X\n"
-                            "Coherence Score (1-5): Y\n"
-                            "Style Score (1-5): Z\n\n"
-                            "Your task is provided as follows:\nText Caption: [{prompt}]"
+    "You are presented with a generated image and its associated text caption. Your task is to analyze the image across multiple dimensions in relation to the caption. Specifically:\n\n"
+    "1. Evaluate each word in the caption based on how well it is visually represented in the image. Assign a numerical score to each word using the format:\n"
+    "   Word-wise Scores: [[\"word1\", score1], [\"word2\", score2], ..., [\"wordN\", scoreN], [\"[No_mistakes]\", scoreM]]\n"
+    "   - A higher score indicates that the word is less well represented in the image.\n"
+    "   - The special token [No_mistakes] represents whether all elements in the caption were correctly depicted. A high score suggests no mistakes; a low score suggests missing or incorrect elements.\n\n"
+    "2. Provide overall assessments for the image along the following axes (each rated from 1 to 5):\n"
+    "- Alignment Score: How well the image matches the caption in terms of content.\n"
+    "- Coherence Score: How logically consistent the image is (absence of visual glitches, object distortions, etc.).\n"
+    "- Style Score: How aesthetically appealing the image looks, regardless of caption accuracy.\n\n"
+    "Output your evaluation using the format below:\n\n"
+    "---\n\n"
+    "Word-wise Scores: [[\"word1\", score1], ..., [\"[No_mistakes]\", scoreM]]\n\n"
+    "Alignment Score (1-5): X\n"
+    "Coherence Score (1-5): Y\n"
+    "Style Score (1-5): Z\n\n"
+    "Your task is provided as follows:\nText Caption: [{prompt}]"
             )
-def sd3_time_shift(shift, t):
-    return (shift * t) / (1 + (shift - 1) * t)
-
-def flow_grpo_step(
-    model_output: torch.Tensor,
-    latents: torch.Tensor,
-    eta: float,
-    sigmas: torch.Tensor,
-    index: int,
-    prev_sample: torch.Tensor,
-    generator: Optional[torch.Generator] = None,
-):
-    device = model_output.device
-
-    sigma = sigmas[index].to(device)
-    sigma_prev = sigmas[index + 1].to(device)
-    sigma_max = sigmas[1].item()
-    dt = sigma_prev - sigma # neg dt
-
-    pred_original_sample = latents - sigma * model_output
- 
-    std_dev_t = torch.sqrt(sigma / (1 - torch.where(sigma == 1, sigma_max, sigma))) * eta
-    
-    prev_sample_mean = latents*(1+std_dev_t**2/(2*sigma)*dt)+model_output*(1+std_dev_t**2*(1-sigma)/(2*sigma))*dt
-    
-    if prev_sample is None:
-        variance_noise = randn_tensor(
-            model_output.shape, 
-            generator=generator, 
-            device=device, 
-            dtype=model_output.dtype
-        )
-        prev_sample = prev_sample_mean + std_dev_t * torch.sqrt(-1*dt) * variance_noise
-    
-    
-    log_prob = (
-        -((prev_sample.detach() - prev_sample_mean) ** 2) / (2 * ((std_dev_t * torch.sqrt(-1*dt))**2))
-        - torch.log(std_dev_t * torch.sqrt(-1*dt))
-        - torch.log(torch.sqrt(2 * torch.as_tensor(math.pi)))
-    )
-
-    # mean along all but batch dimension
-    log_prob = log_prob.mean(dim=tuple(range(1, log_prob.ndim)))
-
-    return prev_sample, pred_original_sample, log_prob
-
-
-def dance_grpo_step(
-    model_output: torch.Tensor,
-    latents: torch.Tensor,
-    eta: float,
-    sigmas: torch.Tensor,
-    index: int,
-    prev_sample: torch.Tensor,
-    grpo: bool,
-    sde_solver: bool,
-):
-    sigma = sigmas[index]
-    dsigma = sigmas[index + 1] - sigma
-    prev_sample_mean = latents + dsigma * model_output
-
-    pred_original_sample = latents - sigma * model_output
-
-    delta_t = sigma - sigmas[index + 1]
-    std_dev_t = eta * math.sqrt(delta_t)
-
-    if sde_solver:
-        score_estimate = -(latents-pred_original_sample*(1 - sigma))/sigma**2
-        log_term = -0.5 * eta**2 * score_estimate
-        prev_sample_mean = prev_sample_mean + log_term * dsigma
-
-    if grpo and prev_sample is None:
-        prev_sample = prev_sample_mean + torch.randn_like(prev_sample_mean) * std_dev_t 
-        
-
-    if grpo:
-        # log prob of prev_sample given prev_sample_mean and std_dev_t
-        log_prob = (
-            -((prev_sample.detach().to(torch.float32) - prev_sample_mean.to(torch.float32)) ** 2) / (2 * (std_dev_t**2))
-        )
-        - math.log(std_dev_t)- torch.log(torch.sqrt(2 * torch.as_tensor(math.pi)))
-
-        # mean along all but batch dimension
-        log_prob = log_prob.mean(dim=tuple(range(1, log_prob.ndim)))
-        return prev_sample, pred_original_sample, log_prob
-    else:
-        return prev_sample_mean,pred_original_sample
-
-
-
 def assert_eq(x, y, msg=None):
     assert x == y, f"{msg or 'Assertion failed'}: {x} != {y}"
 
@@ -326,6 +183,7 @@ def grpo_one_step(
             timesteps,
             i,
             sigma_schedule,
+            return_stats: bool = False,
 ):
     B = encoder_hidden_states.shape[0]
     transformer.train()
@@ -346,16 +204,30 @@ def grpo_one_step(
             return_dict=False,
         )[0]
     if args.grpo_step_mode == 'dance': 
-        z, pred_original, log_prob = dance_grpo_step(pred, latents.to(torch.float32), args.eta, sigma_schedule, i, prev_sample=pre_latents.to(torch.float32), grpo=True, sde_solver=True)
-    elif args.grpo_step_mode == 'flow': 
-        z, pred_original, log_prob = flow_grpo_step(
+        z, pred_original, log_prob, prev_sample_mean, noise_scale, dt = dance_grpo_step(
             model_output=pred,
             latents=latents.to(torch.float32),
             eta=args.eta,
             sigmas=sigma_schedule,
             index=i,
             prev_sample=pre_latents.to(torch.float32),
+            grpo=True,
+            sde_solver=True,
+            return_stats=True,
         )
+    elif args.grpo_step_mode == 'flow': 
+        z, pred_original, log_prob, prev_sample_mean, noise_scale, dt = flow_grpo_step(
+            model_output=pred,
+            latents=latents.to(torch.float32),
+            eta=args.eta,
+            sigmas=sigma_schedule,
+            index=i,
+            prev_sample=pre_latents.to(torch.float32),
+            return_stats=True,
+        )
+
+    if return_stats:
+        return log_prob, prev_sample_mean, noise_scale, dt
     return log_prob
 
 
@@ -490,6 +362,7 @@ def train_one_step(
     args,
     device,
     transformer,
+    ref_transformer,
     vae,
     reward_model,
     tokenizer,
@@ -501,6 +374,8 @@ def train_one_step(
     preprocess_val=None,
 ):
     total_loss = 0.0
+    total_kl_loss = 0.0
+    kl_loss_steps = 0
     optimizer.zero_grad()
     (
         encoder_hidden_states, 
@@ -622,19 +497,35 @@ def train_one_step(
         for _ in range(train_timesteps):
             clip_range = args.clip_range
             adv_clip_max = args.adv_clip_max
-            new_log_probs = grpo_one_step(
-                args,
-                sample["latents"][:,_],
-                sample["next_latents"][:,_],
-                sample["encoder_hidden_states"],
-                sample["pooled_prompt_embeds"],
-                sample["text_ids"],
-                sample["image_ids"],
-                transformer,
-                sample["timesteps"][:,_],
-                perms[i][_],
-                sigma_schedule,
-            )
+            if args.kl_beta > 0:
+                new_log_probs, prev_sample_mean, noise_scale, dt = grpo_one_step(
+                    args,
+                    sample["latents"][:, _],
+                    sample["next_latents"][:, _],
+                    sample["encoder_hidden_states"],
+                    sample["pooled_prompt_embeds"],
+                    sample["text_ids"],
+                    sample["image_ids"],
+                    transformer,
+                    sample["timesteps"][:, _],
+                    perms[i][_],
+                    sigma_schedule,
+                    return_stats=True,
+                )
+            else:
+                new_log_probs = grpo_one_step(
+                    args,
+                    sample["latents"][:, _],
+                    sample["next_latents"][:, _],
+                    sample["encoder_hidden_states"],
+                    sample["pooled_prompt_embeds"],
+                    sample["text_ids"],
+                    sample["image_ids"],
+                    transformer,
+                    sample["timesteps"][:, _],
+                    perms[i][_],
+                    sigma_schedule,
+                )
 
             advantages = torch.clamp(
                 sample["advantages"],
@@ -651,7 +542,61 @@ def train_one_step(
                 1.0 + clip_range,
             )
             
-            loss = torch.mean(torch.maximum(unclipped_loss, clipped_loss)) / (args.gradient_accumulation_steps * train_timesteps)
+            policy_loss = torch.mean(torch.maximum(unclipped_loss, clipped_loss))
+            loss = policy_loss
+
+            kl_loss = None
+            if args.kl_beta > 0:
+                with torch.no_grad():
+                    if ref_transformer is not None:
+                        _, prev_sample_mean_ref, noise_scale_ref, dt_ref = grpo_one_step(
+                            args,
+                            sample["latents"][:, _],
+                            sample["next_latents"][:, _],
+                            sample["encoder_hidden_states"],
+                            sample["pooled_prompt_embeds"],
+                            sample["text_ids"],
+                            sample["image_ids"],
+                            ref_transformer,
+                            sample["timesteps"][:, _],
+                            perms[i][_],
+                            sigma_schedule,
+                            return_stats=True,
+                        )
+                    else:
+                        was_training = transformer.training
+                        transformer.eval()
+                        try:
+                            with disable_lora_adapters(transformer):
+                                _, prev_sample_mean_ref, noise_scale_ref, dt_ref = grpo_one_step(
+                                    args,
+                                    sample["latents"][:, _],
+                                    sample["next_latents"][:, _],
+                                    sample["encoder_hidden_states"],
+                                    sample["pooled_prompt_embeds"],
+                                    sample["text_ids"],
+                                    sample["image_ids"],
+                                    transformer,
+                                    sample["timesteps"][:, _],
+                                    perms[i][_],
+                                    sigma_schedule,
+                                    return_stats=True,
+                                )
+                        finally:
+                            transformer.train(was_training)
+
+                kl_loss = compute_kl_loss(
+                    prev_sample_mean, prev_sample_mean_ref, noise_scale_ref
+                )
+                loss = loss + args.kl_beta * kl_loss
+
+                kl_loss_to_log = kl_loss.detach()
+                dist.all_reduce(kl_loss_to_log, op=dist.ReduceOp.SUM)
+                kl_loss_to_log = kl_loss_to_log / dist.get_world_size()
+                total_kl_loss += float(kl_loss_to_log.item())
+                kl_loss_steps += 1
+
+            loss = loss / (args.gradient_accumulation_steps * train_timesteps)
 
             loss.backward()
             avg_loss = loss.detach().clone()
@@ -668,9 +613,12 @@ def train_one_step(
             print("style_reward", sample["style_reward"].item())
             print("ratio", ratio)
             print("advantage", sample["advantages"].item())
+            if args.kl_beta > 0 and kl_loss is not None:
+                print("kl_loss", float(kl_loss.detach().item()))
             print("final loss", loss.item())
         dist.barrier()
-    return total_loss, grad_norm.item(), dim_reward
+    mean_kl_loss = total_kl_loss / max(kl_loss_steps, 1)
+    return total_loss, grad_norm.item(), dim_reward, mean_kl_loss
 
 
 def main(args):
@@ -708,14 +656,82 @@ def main(args):
             subfolder="transformer",
             torch_dtype = torch.float32
     )
+
+    pipe = None
+    target_modules = None
+    if getattr(args, "use_lora", False):
+        from diffusers import FluxPipeline
+        from diffusers.utils import convert_unet_state_dict_to_peft
+        from peft import LoraConfig, set_peft_model_state_dict
+
+        pipe = FluxPipeline
+        transformer.requires_grad_(False)
+
+        default_target_modules = [
+            "attn.to_k",
+            "attn.to_q",
+            "attn.to_v",
+            "attn.to_out.0",
+            "attn.add_k_proj",
+            "attn.add_q_proj",
+            "attn.add_v_proj",
+            "attn.to_add_out",
+            "ff.net.0.proj",
+            "ff.net.2",
+            "ff_context.net.0.proj",
+            "ff_context.net.2",
+        ]
+        target_modules = _parse_lora_target_modules(
+            getattr(args, "lora_target_modules", None), default_target_modules
+        )
+
+        transformer_lora_config = LoraConfig(
+            r=args.lora_rank,
+            lora_alpha=args.lora_alpha,
+            init_lora_weights=True,
+            target_modules=target_modules,
+        )
+        transformer.add_adapter(transformer_lora_config)
+
+        if args.resume_from_lora_checkpoint:
+            lora_state_dict = pipe.lora_state_dict(args.resume_from_lora_checkpoint)
+            transformer_state_dict = {
+                f'{k.replace("transformer.", "")}': v
+                for k, v in lora_state_dict.items()
+                if k.startswith("transformer.")
+            }
+            transformer_state_dict = convert_unet_state_dict_to_peft(
+                transformer_state_dict
+            )
+            incompatible_keys = set_peft_model_state_dict(
+                transformer, transformer_state_dict, adapter_name="default"
+            )
+            if incompatible_keys is not None:
+                unexpected_keys = getattr(incompatible_keys, "unexpected_keys", None)
+                if unexpected_keys:
+                    main_print(
+                        "Loading adapter weights from state_dict led to unexpected keys not found in the model: "
+                        f"{unexpected_keys}. "
+                    )
     
     fsdp_kwargs, no_split_modules = get_dit_fsdp_kwargs(
         transformer,
         args.fsdp_sharding_startegy,
-        False,
+        getattr(args, "use_lora", False),
         args.use_cpu_offload,
         args.master_weight_type,
     )
+
+    if getattr(args, "use_lora", False):
+        transformer.config.lora_rank = args.lora_rank
+        transformer.config.lora_alpha = args.lora_alpha
+        transformer.config.lora_target_modules = target_modules
+        transformer._no_split_modules = [
+            no_split_module.__name__ for no_split_module in no_split_modules
+        ]
+        fsdp_kwargs["auto_wrap_policy"] = fsdp_kwargs["auto_wrap_policy"](
+            transformer
+        )
     
     transformer = FSDP(transformer, **fsdp_kwargs,)
 
@@ -735,6 +751,22 @@ def main(args):
         f"--> Initializing FSDP with sharding strategy: {args.fsdp_sharding_startegy}"
     )
     # Load the reference model
+    ref_transformer = None
+    if getattr(args, "kl_beta", 0.0) > 0:
+        if args.kl_reference_model_name_or_path:
+            ref_transformer = FluxTransformer2DModel.from_pretrained(
+                args.kl_reference_model_name_or_path,
+                subfolder="transformer",
+                torch_dtype=torch.float32,
+            ).to(device)
+            ref_transformer.requires_grad_(False)
+            ref_transformer.eval()
+        else:
+            assert getattr(args, "use_lora", False), (
+                "args.kl_beta > 0 requires either a separate ref_transformer "
+                "(set --kl_reference_model_name_or_path) or a model that supports adapter disabling "
+                "(enable --use_lora)."
+            )
     main_print(f"--> model loaded")
 
     # Set model as trainable.
@@ -776,7 +808,11 @@ def main(args):
     #vae.enable_tiling()
 
     if rank <= 0:
-        project = "unifiedreward_flux"
+        project = (
+            "unifiedreward_flux_lora"
+            if getattr(args, "use_lora", False)
+            else "unifiedreward_flux"
+        )
         wandb.init(project=project, config=args, name=args.exp_name)
 
     # Train!
@@ -798,6 +834,11 @@ def main(args):
 
     init_steps = 0
     main_print(f"optimizer: {optimizer}")
+
+    if getattr(args, "use_lora", False) and args.resume_from_lora_checkpoint:
+        transformer, optimizer, init_steps = resume_lora_optimizer(
+            transformer, args.resume_from_lora_checkpoint, optimizer
+        )
 
     total_step = step_per_epoch * args.num_train_epochs * args.num_generations // args.gradient_accumulation_steps
     lr_scheduler = get_scheduler(
@@ -844,8 +885,20 @@ def main(args):
             sampler.set_epoch(epoch) # Crucial for distributed shuffling per epoch
 
         if epoch > 0:
-            save_checkpoint(transformer, rank, args.output_dir,
-                                epoch*step_per_epoch, epoch-1)
+            if getattr(args, "use_lora", False):
+                save_lora_checkpoint(
+                    transformer,
+                    optimizer,
+                    rank,
+                    args.output_dir,
+                    epoch * step_per_epoch,
+                    pipe,
+                    epoch - 1,
+                )
+            else:
+                save_checkpoint(
+                    transformer, rank, args.output_dir, epoch * step_per_epoch, epoch - 1
+                )
             dist.barrier()
             
         # for step in range(init_steps+1, args.max_train_steps+1):
@@ -855,15 +908,27 @@ def main(args):
                 transformer.eval()
                 dist.barrier()
 
-                save_checkpoint(transformer, rank, args.output_dir, step, epoch)
+                if getattr(args, "use_lora", False):
+                    save_lora_checkpoint(
+                        transformer,
+                        optimizer,
+                        rank,
+                        args.output_dir,
+                        step,
+                        pipe,
+                        epoch,
+                    )
+                else:
+                    save_checkpoint(transformer, rank, args.output_dir, step, epoch)
                 
                 dist.barrier()
                 transformer.train()
 
-            loss, grad_norm, dim_reward = train_one_step(
+            loss, grad_norm, dim_reward, mean_kl_loss = train_one_step(
                 args,
                 device, 
                 transformer,
+                ref_transformer,
                 vae,
                 reward_model,
                 processor,
@@ -898,6 +963,8 @@ def main(args):
                         "step_time": step_time,
                         "avg_step_time": avg_step_time,
                         "grad_norm": grad_norm,
+                        "kl_loss": mean_kl_loss,
+                        "kl_beta": getattr(args, "kl_beta", 0.0),
                          **dim_reward_log
                     },
                     step=step,
@@ -909,7 +976,7 @@ def main(args):
         destroy_sequence_parallel_group()
 
 
-if __name__ == "__main__":
+def build_parser():
     parser = argparse.ArgumentParser()
     # dataset & dataloader
     parser.add_argument("--data_json_path", type=str, required=True)
@@ -981,6 +1048,38 @@ if __name__ == "__main__":
             "Whether training should be resumed from a previous checkpoint. Use a path saved by"
             ' `--checkpointing_steps`, or `"latest"` to automatically select the last available checkpoint.'
         ),
+    )
+    parser.add_argument(
+        "--use_lora",
+        action="store_true",
+        default=False,
+        help="Enable LoRA fine-tuning (train adapters only).",
+    )
+    parser.add_argument("--lora_rank", type=int, default=16)
+    parser.add_argument("--lora_alpha", type=int, default=16)
+    parser.add_argument(
+        "--lora_target_modules",
+        type=str,
+        default=None,
+        help="Comma-separated module names for LoRA injection (defaults to Flux preset).",
+    )
+    parser.add_argument(
+        "--resume_from_lora_checkpoint",
+        type=str,
+        default=None,
+        help="Path to a LoRA checkpoint directory (e.g. lora-checkpoint-STEP-EPOCH).",
+    )
+    parser.add_argument(
+        "--kl_beta",
+        type=float,
+        default=0.0,
+        help="KL loss coefficient (set > 0 to enable KL regularization against a frozen reference model).",
+    )
+    parser.add_argument(
+        "--kl_reference_model_name_or_path",
+        type=str,
+        default=None,
+        help="Optional reference model path for KL regularization; if not set, will try to use transformer.disable_adapter() as the reference.",
     )
     parser.add_argument(
         "--logging_dir",
@@ -1214,7 +1313,9 @@ if __name__ == "__main__":
         default='flow',
         help="flow or dance",
     )
+    return parser
 
 
-    args = parser.parse_args()
+if __name__ == "__main__":
+    args = build_parser().parse_args()
     main(args)

@@ -111,26 +111,21 @@ bash fastvideo/data_preprocess/preprocess_wan_2_1_rl_embeddings.sh.sh
 ```bash
 # FLUX.1-dev
 ## UnifiedReward-Think for Pref-GRPO
-bash scripts/finetune_prefgrpo_flux.sh
-bash scripts/finetune_prefgrpo_flux_lora.sh
+bash scripts/full_train/finetune_prefgrpo_flux.sh
 
 ## UnifiedReward for Point Score-based GRPO
-bash scripts/finetune_unifiedreward_flux.sh
-bash scripts/finetune_unifiedreward_flux_lora.sh
+bash scripts/full_train/finetune_unifiedreward_flux.sh
 
 # Qwen-Image
 ## UnifiedReward-Think for Pref-GRPO
-bash scripts/finetune_prefgrpo_qwenimage_grpo.sh
-bash scripts/finetune_prefgrpo_qwenimage_grpo_lora.sh
+bash scripts/full_train/finetune_prefgrpo_qwenimage_grpo.sh
 
 ## UnifiedReward for Point Score-based GRPO
-bash scripts/finetune_unifiedreward_qwenimage_grpo.sh
-bash scripts/finetune_unifiedreward_qwenimage_grpo_lora.sh
+bash scripts/full_train/finetune_unifiedreward_qwenimage_grpo.sh
 
 # Wan2.1
 ## Pref-GRPO
-bash scripts/finetune_prefgrpo_wan_2_1.sh
-bash scripts/finetune_prefgrpo_wan_2_1_lora.sh
+bash scripts/full_train/finetune_prefgrpo_wan_2_1.sh
 ```
 
 ### 🚀 Inference and Evaluation
