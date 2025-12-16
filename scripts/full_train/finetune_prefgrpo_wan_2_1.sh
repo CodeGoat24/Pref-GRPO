@@ -20,22 +20,24 @@ TRAIN_ARGS=(
   --exp_name "${EXP_NAME}"
   --train_batch_size 1
   --dataloader_num_workers 4
-  --learning_rate 6e-6
+  --learning_rate 5e-6
   --output_dir "${OUTPUT_DIR}"
   --h 240
   --w 416
   --t 33
-  --sampling_steps 50
-  --eta 0.3
-  --num_generations 8
+  --sampling_steps 20
+  --eta 0.7
+  --gradient_accumulation_steps 3
+  --num_generations 9
   --cfg_infer 5.0
   --use_unifiedreward_think
   --use_clip
+  --clip_range 1e-3
   --kl_beta 0.04
   --api_url "${API_URL}"
-  --checkpointing_steps 100
+  --checkpointing_steps 20
 )
 
-torchrun --nnodes=8 --nproc_per_node=8 --node_rank="${INDEX}" --master_addr="${CHIEF_IP}" --master_port=8081 \
+torchrun --nnodes=2 --nproc_per_node=8 --node_rank="${INDEX}" --master_addr="${CHIEF_IP}" --master_port=8081 \
   fastvideo/train_wan_2_1_pref_grpo.py \
   "${TRAIN_ARGS[@]}"
