@@ -37,9 +37,11 @@ TRAIN_ARGS=(
   --api_url "${API_URL}"
   --checkpointing_steps 20
   --clip_range 1e-3
-  --kl_beta 0.04
+  --kl_beta 0.004
   --lora_alpha 128
   --lora_rank 64
+  --kl_beta 0.004
+  --rationorm
 )
 
 torchrun --nnodes=2 --nproc_per_node=8 --node_rank="${INDEX}" --master_addr="${CHIEF_IP}" --master_port=8081 \

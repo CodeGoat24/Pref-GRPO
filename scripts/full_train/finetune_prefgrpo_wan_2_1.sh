@@ -33,9 +33,10 @@ TRAIN_ARGS=(
   --use_unifiedreward_think
   --use_clip
   --clip_range 1e-3
-  --kl_beta 0.04
+  --kl_beta 0.004
   --api_url "${API_URL}"
   --checkpointing_steps 20
+  --rationorm
 )
 
 torchrun --nnodes=2 --nproc_per_node=8 --node_rank="${INDEX}" --master_addr="${CHIEF_IP}" --master_port=8081 \
