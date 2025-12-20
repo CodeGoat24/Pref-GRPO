@@ -28,6 +28,7 @@ COMMON_TRAIN_ARGS=(
   --kl_beta 0
   --init_same_noise
   --grpo_step_mode flow
+  --rationorm
 )
 
 wandb_online() {

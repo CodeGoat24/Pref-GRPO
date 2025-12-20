@@ -129,6 +129,7 @@ def run_sample_step(
     if grpo_sample:
         all_latents = [z]
         all_log_probs = []
+        all_prev_sample_mean = [] if getattr(args, "rationorm", False) else None
         for i in progress_bar:  # Add progress bar
             B = encoder_hidden_states.shape[0]
             sigma = sigma_schedule[i]
@@ -152,9 +153,44 @@ def run_sample_step(
                     return_dict=False,
                 )[0]
             if args.grpo_step_mode == 'dance': 
-                z, pred_original, log_prob = dance_grpo_step(pred, z.to(torch.float32), args.eta, sigmas=sigma_schedule, index=i, prev_sample=None, grpo=True, sde_solver=True)
+                if getattr(args, "rationorm", False):
+                    z, pred_original, log_prob, prev_sample_mean, _, _ = dance_grpo_step(
+                        pred,
+                        z.to(torch.float32),
+                        args.eta,
+                        sigmas=sigma_schedule,
+                        index=i,
+                        prev_sample=None,
+                        grpo=True,
+                        sde_solver=True,
+                        return_stats=True,
+                    )
+                    all_prev_sample_mean.append(prev_sample_mean)
+                else:
+                    z, pred_original, log_prob = dance_grpo_step(
+                        pred,
+                        z.to(torch.float32),
+                        args.eta,
+                        sigmas=sigma_schedule,
+                        index=i,
+                        prev_sample=None,
+                        grpo=True,
+                        sde_solver=True,
+                    )
             elif args.grpo_step_mode == 'flow': 
-                z, pred_original, log_prob = flow_grpo_step(
+                if getattr(args, "rationorm", False):
+                    z, pred_original, log_prob, prev_sample_mean, _, _ = flow_grpo_step(
+                        model_output=pred,
+                        latents=z.to(torch.float32),
+                        eta=args.eta,
+                        sigmas=sigma_schedule,
+                        index=i,
+                        prev_sample=None,
+                        return_stats=True,
+                    )
+                    all_prev_sample_mean.append(prev_sample_mean)
+                else:
+                    z, pred_original, log_prob = flow_grpo_step(
                         model_output=pred,
                         latents=z.to(torch.float32),
                         eta=args.eta,
@@ -168,6 +204,9 @@ def run_sample_step(
         latents = pred_original
         all_latents = torch.stack(all_latents, dim=1)  # (batch_size, num_steps + 1, 4, 64, 64)
         all_log_probs = torch.stack(all_log_probs, dim=1)  # (batch_size, num_steps, 1)
+        if getattr(args, "rationorm", False):
+            all_prev_sample_mean = torch.stack(all_prev_sample_mean, dim=1)
+            return z, latents, all_latents, all_log_probs, all_prev_sample_mean
         return z, latents, all_latents, all_log_probs
 
         
@@ -267,6 +306,7 @@ def sample_reference_model(
 
     all_latents = []
     all_log_probs = []
+    all_prev_sample_mean = [] if getattr(args, "rationorm", False) else None
     all_rewards = []
     all_image_ids = []
 
@@ -294,18 +334,33 @@ def sample_reference_model(
         grpo_sample=True
         progress_bar = tqdm(range(0, sample_steps), desc="Sampling Progress")
         with torch.no_grad():
-            z, latents, batch_latents, batch_log_probs = run_sample_step(
-                args,
-                input_latents_new,
-                progress_bar,
-                sigma_schedule,
-                transformer,
-                batch_encoder_hidden_states,
-                batch_pooled_prompt_embeds,
-                batch_text_ids,
-                image_ids,
-                grpo_sample,
-            )
+            if getattr(args, "rationorm", False):
+                z, latents, batch_latents, batch_log_probs, batch_prev_sample_mean = run_sample_step(
+                    args,
+                    input_latents_new,
+                    progress_bar,
+                    sigma_schedule,
+                    transformer,
+                    batch_encoder_hidden_states,
+                    batch_pooled_prompt_embeds,
+                    batch_text_ids,
+                    image_ids,
+                    grpo_sample,
+                )
+                all_prev_sample_mean.append(batch_prev_sample_mean)
+            else:
+                z, latents, batch_latents, batch_log_probs = run_sample_step(
+                    args,
+                    input_latents_new,
+                    progress_bar,
+                    sigma_schedule,
+                    transformer,
+                    batch_encoder_hidden_states,
+                    batch_pooled_prompt_embeds,
+                    batch_text_ids,
+                    image_ids,
+                    grpo_sample,
+                )
         
         all_image_ids.append(image_ids)
         all_latents.append(batch_latents)
@@ -342,11 +397,24 @@ def sample_reference_model(
 
     all_latents = torch.cat(all_latents, dim=0)
     all_log_probs = torch.cat(all_log_probs, dim=0)
+    if getattr(args, "rationorm", False):
+        all_prev_sample_mean = torch.cat(all_prev_sample_mean, dim=0)
     
     alignment_reward = torch.cat(alignment_reward, dim=0)
     style_reward = torch.cat(style_reward, dim=0)
 
     all_image_ids = torch.stack(all_image_ids, dim=0)
+    if getattr(args, "rationorm", False):
+        return (
+            alignment_reward,
+            style_reward,
+            all_latents,
+            all_log_probs,
+            all_prev_sample_mean,
+            sigma_schedule,
+            all_image_ids,
+            dim_reward,
+        )
     return alignment_reward, style_reward, all_latents, all_log_probs, sigma_schedule, all_image_ids, dim_reward
 
 
@@ -401,13 +469,37 @@ def train_one_step(
             caption = [item for item in caption for _ in range(args.num_generations)]
         else:
             raise ValueError(f"Unsupported caption type: {type(caption)}")
-    alignment_reward, style_reward, all_latents, all_log_probs, sigma_schedule, all_image_ids, dim_reward = sample_reference_model(
+    if getattr(args, "rationorm", False):
+        (
+            alignment_reward,
+            style_reward,
+            all_latents,
+            all_log_probs,
+            all_prev_sample_mean,
+            sigma_schedule,
+            all_image_ids,
+            dim_reward,
+        ) = sample_reference_model(
             args,
-            device, 
+            device,
             transformer,
             vae,
-            encoder_hidden_states, 
-            pooled_prompt_embeds, 
+            encoder_hidden_states,
+            pooled_prompt_embeds,
+            text_ids,
+            reward_model,
+            tokenizer,
+            caption,
+            preprocess_val,
+        )
+    else:
+        alignment_reward, style_reward, all_latents, all_log_probs, sigma_schedule, all_image_ids, dim_reward = sample_reference_model(
+            args,
+            device,
+            transformer,
+            vae,
+            encoder_hidden_states,
+            pooled_prompt_embeds,
             text_ids,
             reward_model,
             tokenizer,
@@ -436,6 +528,8 @@ def train_one_step(
         "encoder_hidden_states": encoder_hidden_states,
         "pooled_prompt_embeds": pooled_prompt_embeds,
     }
+    if getattr(args, "rationorm", False):
+        samples["prev_sample_mean"] = all_prev_sample_mean[:, :-1]
     gathered_align_reward = gather_tensor(samples["alignment_reward"])
     gathered_style_reward = gather_tensor(samples["style_reward"])
 
@@ -479,7 +573,10 @@ def train_one_step(
             for _ in range(batch_size)
         ]
     ).to(device) 
-    for key in ["timesteps", "latents", "next_latents", "log_probs"]:
+    permute_keys = ["timesteps", "latents", "next_latents", "log_probs"]
+    if getattr(args, "rationorm", False):
+        permute_keys.append("prev_sample_mean")
+    for key in permute_keys:
         samples[key] = samples[key][
             torch.arange(batch_size).to(device) [:, None],
             perms,
@@ -497,7 +594,8 @@ def train_one_step(
         for _ in range(train_timesteps):
             clip_range = args.clip_range
             adv_clip_max = args.adv_clip_max
-            if args.kl_beta > 0:
+            need_stats = getattr(args, "rationorm", False) or args.kl_beta > 0
+            if need_stats:
                 new_log_probs, prev_sample_mean, noise_scale, dt = grpo_one_step(
                     args,
                     sample["latents"][:, _],
@@ -533,7 +631,21 @@ def train_one_step(
                 adv_clip_max,
             )
 
-            ratio = torch.exp(new_log_probs - sample["log_probs"][:,_])
+            if getattr(args, "rationorm", False):
+                dt_f = dt.to(torch.float32)
+                sqrt_dt = torch.sqrt(torch.clamp(torch.abs(dt_f), min=1e-20))
+                sigma_t = (noise_scale.to(torch.float32) / sqrt_dt).mean()
+
+                diff_sq = (prev_sample_mean.to(torch.float32) - sample["prev_sample_mean"][:, _].to(torch.float32)) ** 2
+                reduce_dims = tuple(range(1, diff_sq.ndim))
+                ratio_mean_bias = diff_sq.mean(dim=reduce_dims)
+
+                scale = sqrt_dt.mean() * sigma_t
+                scale = torch.clamp(scale, min=1e-20)
+                ratio_mean_bias = ratio_mean_bias / (2.0 * (scale**2))
+                ratio = torch.exp((new_log_probs - sample["log_probs"][:, _] + ratio_mean_bias) * scale)
+            else:
+                ratio = torch.exp(new_log_probs - sample["log_probs"][:,_])
 
             unclipped_loss = -advantages * ratio
             clipped_loss = -advantages * torch.clamp(
@@ -543,6 +655,8 @@ def train_one_step(
             )
             
             policy_loss = torch.mean(torch.maximum(unclipped_loss, clipped_loss))
+            if getattr(args, "rationorm", False):
+                policy_loss = policy_loss / (sqrt_dt.mean() ** 2)
             loss = policy_loss
 
             kl_loss = None
@@ -1312,6 +1426,12 @@ def build_parser():
         type=str,
         default='flow',
         help="flow or dance",
+    )
+    parser.add_argument(
+        "--rationorm",
+        action="store_true",
+        default=False,
+        help="Enable ratio normalization (rationorm) like SD3 training.",
     )
     return parser
 
