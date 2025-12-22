@@ -338,24 +338,6 @@ class FSDP_EMA:
                 options=restore_options
             )
 
-def save_ema_checkpoint(ema_handler, rank, output_dir, step, epoch, config_dict):
-    if rank == 0 and ema_handler is not None:
-        ema_checkpoint_path = os.path.join(output_dir, f"checkpoint-ema-{step}-{epoch}")
-        os.makedirs(ema_checkpoint_path, exist_ok=True)
-        weight_path = os.path.join(ema_checkpoint_path ,
-                                   "diffusion_pytorch_model.safetensors")
-        save_file(ema_handler.ema_state_dict_rank0, weight_path)
-        if "dtype" in config_dict:
-            del config_dict["dtype"]  # TODO
-        config_path = os.path.join(ema_checkpoint_path, "config.json")
-        # save dict as json
-        import json
-        with open(config_path, "w") as f:
-            json.dump(config_dict, f, indent=4)
-        #torch.save(ema_handler.ema_state_dict_rank0, os.path.join(ema_checkpoint_path, "ema_model.pt"))
-        main_print(f"--> EMA checkpoint saved at {ema_checkpoint_path}")
-
-
 def assert_eq(x, y, msg=None):
     assert x == y, f"{msg or 'Assertion failed'}: {x} != {y}"
 
@@ -1343,10 +1325,6 @@ def main(args):
                             )
                     else:
                         save_checkpoint(transformer, rank, args.output_dir, step, epoch)
-                if args.use_ema:
-                    save_ema_checkpoint(ema_handler, rank, args.output_dir, step, epoch, dict(transformer.config))
-
-
                 dist.barrier()
 
             loss, grad_norm, dim_reward, mean_kl_loss = train_one_step(

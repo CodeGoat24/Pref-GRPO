@@ -1569,12 +1569,12 @@ def build_parser():
             default=10,
             help="Run eval every N steps (0 disables).",
         )
-        parser.add_argument(
-            "--eval_num_prompts",
-            type=int,
-            default=32,
-            help="Number of prompts to sample for eval videos.",
-        )
+    parser.add_argument(
+        "--eval_num_prompts",
+        type=int,
+        default=32,
+        help="Number of prompts to sample for eval videos.",
+    )
     parser.add_argument("--cfg", type=float, default=0.0)
     parser.add_argument(
         "--precondition_outputs",
