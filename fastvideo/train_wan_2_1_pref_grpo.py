@@ -21,6 +21,7 @@ from fastvideo.utils.parallel_states import (
 import time
 from torch.utils.data import DataLoader
 import torch
+import random
 
 from torch.utils.data.distributed import DistributedSampler
 import wandb
@@ -38,7 +39,6 @@ import cv2
 check_min_version("0.31.0")
 from collections import deque
 import numpy as np
-from torch.nn import functional as F
 from PIL import Image
 from diffusers import AutoencoderKLWan, WanTransformer3DModel
 from diffusers.models.transformers.transformer_wan import WanTransformerBlock
@@ -49,12 +49,13 @@ from diffusers.video_processor import VideoProcessor
 from diffusers.utils import export_to_video
 import json
 from fastvideo.rewards.unifiedreward_think import cal_win_rate_videos
+from fastvideo.rewards.clip_reward import init_clip_model, compute_clip_score
+from fastvideo.rewards.templates import get_unifiedreward_think_video_template
 from fastvideo.grpo.steps import dance_grpo_step, flow_grpo_step, sd3_time_shift
+from fastvideo.grpo.ema import EMAModuleWrapper
 
     
-
-template = "Given a caption and two videos generated based on this caption, please analyze in detail the two provided videos. Evaluate them on various dimensions such as semantic consistency (how closely the video content aligns with the caption), temporal coherence (smoothness and logical flow of motion across frames), authenticity (realism and attention to detail), and any other factors you deem relevant. For each evaluation dimension, provide a score between 1-10 for both videos (e.g., Video 1: 8/10, Video 2: 6/10) and provide a concise rationale for the score. Calculate the total score for each video by summing all dimension scores. Use a chain-of-thought process to detail your reasoning steps, and enclose all your detailed reasoning within <think> and </think> tags. Then, in the <answer> tag, output exactly one of the following strings: 'Video 1 is better' or 'Video 2 is better' based on the total scores. No additional text is allowed in the <answer> section.\n\nExample output format:\n<think>\n1. Semantic consistency: Video 1 (9/10) - ...; Video 2 (7/10) - ...\n2. Temporal coherence: Video 1 (8/10) - ...; Video 2 (6/10) - ...\n3. Authenticity: Video 1 (7/10) - ...; Video 2 (5/10) - ...\n[Additional dimensions if any]: Video 2 (8/10) - ...; Video 1 (6/10) - ...\nTotal score:\nVideo 1: 9+8+7+6=30\nVideo 2: 7+6+5+8=26\n</think>\n<answer>Video 1 is better</answer>\n**Note: In the example above, scores and the final answer are placeholders meant only to demonstrate the format. Your actual evaluation should be based on the quality of two given videos.**\n\nYour task is provided as follows:\nText Caption: [{prompt}]"
-
+template = get_unifiedreward_think_video_template()
 
 def save_wan_lora_checkpoint(transformer, optimizer, pipeline, output_dir, step, epoch, rank):
     if rank > 0:
@@ -141,6 +142,132 @@ def video_first_frame_to_pil(video_path):
 
     return pil_image
 
+
+def load_eval_prompts(dataset, num_prompts, seed):
+    if num_prompts <= 0:
+        return []
+    total = len(dataset)
+    num_prompts = min(num_prompts, total)
+    rng = random.Random(seed)
+    indices = rng.sample(range(total), num_prompts)
+    samples = []
+    for idx in indices:
+        data_item = dataset.data_anno[idx]
+        prompt_embed_file = data_item["prompt_embed_path"]
+        negative_prompt_embeds_file = data_item["negative_prompt_embeds_path"]
+        prompt_embed = torch.load(
+            os.path.join(dataset.prompt_embed_dir, prompt_embed_file),
+            map_location="cpu",
+            weights_only=True,
+        )
+        negative_prompt_embeds = torch.load(
+            os.path.join(dataset.negative_prompt_embeds_dir, negative_prompt_embeds_file),
+            map_location="cpu",
+            weights_only=True,
+        )
+        caption = data_item.get("caption", "")
+        samples.append((prompt_embed, negative_prompt_embeds, caption))
+    return samples
+
+
+def run_eval_videos(
+    args,
+    transformer,
+    vae,
+    eval_prompts,
+    device,
+    output_dir,
+    step,
+    rank,
+    world_size,
+):
+    if not eval_prompts:
+        return
+    assigned_indices = [i for i in range(len(eval_prompts)) if i % world_size == rank]
+    if not assigned_indices:
+        return
+    eval_root = os.path.join(output_dir, "eval_video", f"{step}_step")
+    os.makedirs(eval_root, exist_ok=True)
+    sigma_schedule = torch.linspace(1, 0, args.sampling_steps + 1)
+    sigma_schedule = sd3_time_shift(args.shift, sigma_schedule)
+    video_processor = VideoProcessor(vae_scale_factor=8)
+    was_training = transformer.training
+    if args.init_same_noise:
+        base_latents = torch.randn(
+            (1, 16, ((args.t - 1) // 4) + 1, args.h // 8, args.w // 8),
+            device=device,
+            dtype=torch.bfloat16,
+        )
+    for idx in assigned_indices:
+        prompt_embed, negative_prompt_embeds, caption = eval_prompts[idx]
+        caption = str(caption)
+        prompt_embed = prompt_embed.to(device)
+        negative_prompt_embeds = negative_prompt_embeds.to(device)
+        if args.init_same_noise:
+            input_latents = base_latents
+        else:
+            input_latents = torch.randn(
+                (1, 16, ((args.t - 1) // 4) + 1, args.h // 8, args.w // 8),
+                device=device,
+                dtype=torch.bfloat16,
+            )
+        progress_bar = tqdm(
+            range(0, args.sampling_steps),
+            desc=f"Eval Sampling {idx}",
+            disable=True,
+        )
+        with torch.no_grad():
+            if getattr(args, "rationorm", False):
+                z, latents, _, _, _ = run_sample_step(
+                    args,
+                    input_latents.clone(),
+                    progress_bar,
+                    sigma_schedule,
+                    transformer,
+                    prompt_embed.unsqueeze(0),
+                    negative_prompt_embeds.unsqueeze(0),
+                    True,
+                )
+            else:
+                z, latents, _, _ = run_sample_step(
+                    args,
+                    input_latents.clone(),
+                    progress_bar,
+                    sigma_schedule,
+                    transformer,
+                    prompt_embed.unsqueeze(0),
+                    negative_prompt_embeds.unsqueeze(0),
+                    True,
+                )
+        vae.enable_tiling()
+        with torch.inference_mode():
+            with torch.autocast("cuda", dtype=torch.bfloat16):
+                latents_mean = (
+                    torch.tensor(vae.config.latents_mean)
+                    .view(1, vae.config.z_dim, 1, 1, 1)
+                    .to(latents.device, latents.dtype)
+                )
+                latents_std = 1.0 / torch.tensor(vae.config.latents_std).view(
+                    1, vae.config.z_dim, 1, 1, 1
+                ).to(latents.device, latents.dtype)
+                latents = latents / latents_std + latents_mean
+                video = vae.decode(latents, return_dict=False)[0]
+                decoded_video = video_processor.postprocess_video(video)
+        safe_caption = "".join(
+            ch if ("0" <= ch <= "9" or "A" <= ch <= "Z" or "a" <= ch <= "z" or ch in "-_")
+            else "_"
+            for ch in caption
+        )
+        safe_caption = safe_caption.encode("ascii", errors="ignore").decode("ascii")
+        safe_caption = safe_caption.strip("_")[:60] or "prompt"
+        save_path = os.path.join(
+            eval_root, f"sample_{idx:02d}_rank{rank}_{safe_caption}.mp4"
+        )
+        export_to_video(decoded_video[0], save_path, fps=16)
+    if was_training:
+        transformer.train()
+    else:
+        transformer.eval()
 
 
 
@@ -529,23 +656,26 @@ def sample_reference_model(
                 latents = latents / latents_std + latents_mean
                 video = vae.decode(latents, return_dict=False)[0]
                 decoded_video = video_processor.postprocess_video(video)
-        os.makedirs("./videos_", exist_ok=True)
-        save_path = f"./videos_/wan_2_1_{rank}_{index}.mp4"
+        rollout_root = (
+            os.path.join(args.output_dir, "rollout")
+            if args.output_dir is not None
+            else "rollout"
+        )
+        os.makedirs(rollout_root, exist_ok=True)
+        save_path = os.path.join(rollout_root, f"wan_2_1_{rank}_{index}.mp4")
         export_to_video(decoded_video[0], save_path, fps=16)
 
         if args.use_clip:
-            with torch.no_grad():
-                image_path = video_first_frame_to_pil(save_path)
-
-                text = tokenizer([batch_caption[0]]).to(device=device, non_blocking=True)
-                clip_image = preprocess_dgn5b(image_path).unsqueeze(0).to(device=device, non_blocking=True)
-                
-                clip_image_features = clip_model.encode_image(clip_image)
-                clip_text_features = clip_model.encode_text(text)
-                clip_image_features = F.normalize(clip_image_features, dim=-1)
-                clip_text_features = F.normalize(clip_text_features, dim=-1)
-                clip_score = clip_image_features @ clip_text_features.T
-                all_clip_rewards.append(clip_score[0])
+            image_path = video_first_frame_to_pil(save_path)
+            clip_score = compute_clip_score(
+                clip_model,
+                preprocess_dgn5b,
+                tokenizer,
+                image_path,
+                batch_caption[0],
+                device,
+            )
+            all_clip_rewards.append(clip_score)
         
         if args.use_unifiedreward_think:
             all_input_data.append({
@@ -616,6 +746,11 @@ def train_one_step(
     max_grad_norm,
     preprocess_val,
     kl_beta: Optional[float] = None,
+    ema: Optional[EMAModuleWrapper] = None,
+    ema_parameters: Optional[list[torch.nn.Parameter]] = None,
+    ema_use_in_rollout: bool = False,
+    ema_start_step: int = 0,
+    global_step: int = 0,
 ):
     if kl_beta is None:
         kl_beta = float(getattr(args, "kl_beta", 0.0))
@@ -643,6 +778,15 @@ def train_one_step(
             raise ValueError(f"Unsupported caption type: {type(caption)}")
 
     if getattr(args, "rationorm", False):
+        ema_applied = False
+        if (
+            ema is not None
+            and ema_parameters is not None
+            and ema_use_in_rollout
+            and global_step >= ema_start_step
+        ):
+            ema.copy_to(ema_parameters, store_temp=True)
+            ema_applied = True
         (
             winrate_rewards,
             clip_rewards,
@@ -665,7 +809,18 @@ def train_one_step(
             caption,
             preprocess_val,
         )
+        if ema_applied:
+            ema.restore(ema_parameters)
     else:
+        ema_applied = False
+        if (
+            ema is not None
+            and ema_parameters is not None
+            and ema_use_in_rollout
+            and global_step >= ema_start_step
+        ):
+            ema.copy_to(ema_parameters, store_temp=True)
+            ema_applied = True
         winrate_rewards, clip_rewards, all_latents, all_log_probs, sigma_schedule, dim_reward = sample_reference_model(
             args,
             device,
@@ -680,6 +835,8 @@ def train_one_step(
             caption,
             preprocess_val,
         )
+        if ema_applied:
+            ema.restore(ema_parameters)
     batch_size = all_latents.shape[0]
     timestep_value = [int(sigma * 1000) for sigma in sigma_schedule][:args.sampling_steps]
     timestep_values = [timestep_value[:] for _ in range(batch_size)]
@@ -947,13 +1104,7 @@ def main(args):
     preprocess_dgn5b=None
     preprocess_val=None
     if args.use_clip:
-        import open_clip
-        clip_model, _, preprocess_dgn5b = open_clip.create_model_and_transforms('ViT-H-14', 
-            pretrained='./open_clip_pytorch_model.bin')
-        
-        processor = open_clip.get_tokenizer('ViT-H-14')
-        clip_model = clip_model.to(device)
-        clip_model.eval()
+        clip_model, preprocess_dgn5b, processor = init_clip_model(device)
 
 
     main_print(f"--> loading model from {args.pretrained_model_name_or_path}")
@@ -1037,6 +1188,14 @@ def main(args):
 
     params_to_optimize = transformer.parameters()
     params_to_optimize = list(filter(lambda p: p.requires_grad, params_to_optimize))
+    ema = None
+    if getattr(args, "use_ema", False):
+        ema = EMAModuleWrapper(
+            params_to_optimize,
+            decay=args.ema_decay,
+            update_step_interval=args.ema_update_interval,
+            device=device,
+        )
 
     optimizer = torch.optim.AdamW(
         params_to_optimize,
@@ -1055,6 +1214,17 @@ def main(args):
         )
 
     train_dataset = LatentDataset(args.data_json_path, args.num_latent_t, args.cfg)
+    eval_prompts = None
+    if (
+        args.eval_every_steps > 0
+        and args.output_dir is not None
+    ):
+        seed = args.seed if args.seed is not None else 0
+        eval_prompts = load_eval_prompts(
+            train_dataset,
+            args.eval_num_prompts,
+            seed,
+        )
     sampler = DistributedSampler(
             train_dataset, rank=rank, num_replicas=world_size, shuffle=True, seed=args.sampler_seed
         )
@@ -1116,6 +1286,29 @@ def main(args):
     # print dtype
     main_print(f"  Master weight dtype: {transformer.parameters().__next__().dtype}")
 
+    if (
+        args.eval_every_steps > 0
+        and args.output_dir is not None
+        and eval_prompts
+    ):
+        if ema is not None:
+            ema.copy_to(params_to_optimize, store_temp=True)
+        run_eval_videos(
+            args,
+            transformer,
+            vae,
+            eval_prompts,
+            device,
+            args.output_dir,
+            0,
+            rank,
+            world_size,
+        )
+        if ema is not None:
+            ema.restore(params_to_optimize)
+                
+    dist.barrier()
+
     # Potentially load in the weights and states from a previous save
     if args.resume_from_checkpoint:
         assert NotImplementedError("resume_from_checkpoint is not supported now.")
@@ -1149,6 +1342,14 @@ def main(args):
             sampler.set_epoch(epoch) # Crucial for distributed shuffling per epoch       
         if epoch > 0:
             epoch_step = epoch * step_per_epoch
+            ema_applied = False
+            if (
+                ema is not None
+                and getattr(args, "ema_use_in_checkpoint", True)
+                and epoch_step >= args.ema_start_step
+            ):
+                ema.copy_to(params_to_optimize, store_temp=True)
+                ema_applied = True
             if getattr(args, "use_lora", False):
                 save_wan_lora_checkpoint(
                     transformer,
@@ -1173,12 +1374,23 @@ def main(args):
                     with open(config_path, "w") as f:
                         json.dump(config_dict, f, indent=4)
                 main_print(f"--> checkpoint saved at step {epoch_step}")
+            if ema_applied:
+                ema.restore(params_to_optimize)
             dist.barrier()
         for step, (prompt_embeds, negative_prompt_embeds, caption) in enumerate(train_dataloader):
             prompt_embeds = prompt_embeds.to(device)
             negative_prompt_embeds = negative_prompt_embeds.to(device)
             start_time = time.time()
+            global_step = epoch * step_per_epoch + step
             if (step-1) % args.checkpointing_steps == 0 and step!=1:
+                ema_applied = False
+                if (
+                    ema is not None
+                    and getattr(args, "ema_use_in_checkpoint", True)
+                    and global_step >= args.ema_start_step
+                ):
+                    ema.copy_to(params_to_optimize, store_temp=True)
+                    ema_applied = True
                 if getattr(args, "use_lora", False):
                     save_wan_lora_checkpoint(
                         transformer, optimizer, pipe, args.output_dir, step, epoch, rank
@@ -1197,6 +1409,8 @@ def main(args):
                         with open(config_path, "w") as f:
                             json.dump(config_dict, f, indent=4)
                     main_print(f"--> checkpoint saved at step {step}")
+                if ema_applied:
+                    ema.restore(params_to_optimize)
                 dist.barrier()
 
             loss, grad_norm, dim_reward, mean_kl_loss = train_one_step(
@@ -1218,7 +1432,38 @@ def main(args):
                 args.max_grad_norm,
                 preprocess_val,
                 kl_beta=kl_beta,
+                ema=ema,
+                ema_parameters=params_to_optimize,
+                ema_use_in_rollout=getattr(args, "ema_use_in_rollout", True),
+                ema_start_step=args.ema_start_step,
+                global_step=global_step,
             )
+            if ema is not None and global_step >= args.ema_start_step:
+                ema.step(params_to_optimize, global_step)
+
+            if (
+        args.eval_every_steps > 0
+        and args.output_dir is not None
+        and global_step > 0
+        and global_step % args.eval_every_steps == 0
+    ):
+                if eval_prompts:
+                    if ema is not None:
+                        ema.copy_to(params_to_optimize, store_temp=True)
+                    run_eval_videos(
+                        args,
+                        transformer,
+                        vae,
+                        eval_prompts,
+                        device,
+                        args.output_dir,
+                        global_step,
+                        rank,
+                        world_size,
+                    )
+                    if ema is not None:
+                        ema.restore(params_to_optimize)
+            dist.barrier()
 
             if getattr(args, "kl_adaptive", False):
                 if rank <= 0 and kl_controller is not None:
@@ -1240,7 +1485,6 @@ def main(args):
             )
             progress_bar.update(1)
             if rank <= 0:
-                global_step = epoch * step_per_epoch + step
                 dim_reward_log = {k: np.mean(v) for k, v in dim_reward.items()}
                 dim_reward_log.update({f"{k}_std": np.std(v) for k, v in dim_reward.items()})
 
@@ -1295,6 +1539,42 @@ def build_parser():
     # diffusion setting
     parser.add_argument("--ema_decay", type=float, default=0.995)
     parser.add_argument("--ema_start_step", type=int, default=0)
+    parser.add_argument(
+        "--use_ema",
+        action="store_true",
+        default=False,
+        help="Enable EMA tracking for trainable parameters.",
+    )
+    parser.add_argument(
+        "--ema_update_interval",
+        type=int,
+        default=1,
+        help="Number of optimizer steps between EMA updates.",
+    )
+    parser.add_argument(
+        "--ema_use_in_rollout",
+        action="store_true",
+        default=False,
+        help="Use EMA weights during rollout sampling inside training.",
+    )
+    parser.add_argument(
+        "--ema_use_in_checkpoint",
+        action="store_true",
+        default=False,
+        help="Save checkpoints using EMA weights instead of live weights.",
+    )
+    parser.add_argument(
+            "--eval_every_steps",
+            type=int,
+            default=10,
+            help="Run eval every N steps (0 disables).",
+        )
+        parser.add_argument(
+            "--eval_num_prompts",
+            type=int,
+            default=32,
+            help="Number of prompts to sample for eval videos.",
+        )
     parser.add_argument("--cfg", type=float, default=0.0)
     parser.add_argument(
         "--precondition_outputs",

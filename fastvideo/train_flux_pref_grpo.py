@@ -11,6 +11,7 @@
 
 import argparse
 import os
+import random
 from fastvideo.utils.parallel_states import (
     initialize_sequence_parallel_state,
     destroy_sequence_parallel_group,
@@ -44,11 +45,13 @@ from diffusers.image_processor import VaeImageProcessor
 check_min_version("0.31.0")
 from collections import deque
 import numpy as np
-from torch.nn import functional as F
 from diffusers import FluxTransformer2DModel, AutoencoderKL
 from fastvideo.rewards.unifiedreward_think import cal_win_rate_images
+from fastvideo.rewards.clip_reward import init_clip_model, compute_clip_score
+from fastvideo.rewards.templates import get_unifiedreward_think_image_template
 from fastvideo.grpo.kl import compute_kl_loss, disable_lora_adapters
 from fastvideo.grpo.steps import dance_grpo_step, flow_grpo_step, sd3_time_shift
+from fastvideo.grpo.ema import EMAModuleWrapper
 
 def _parse_lora_target_modules(arg, default):
     if arg is None:
@@ -57,7 +60,138 @@ def _parse_lora_target_modules(arg, default):
     items = [s for s in items if s]
     return items if items else list(default)
 
-template = "Given a caption and two images generated based on this caption, please analyze in detail the two provided images. Evaluate them on various dimensions such as semantic consistency (how closely the image content aligns with the caption), aesthetics (composition, color usage, artistic expression), authenticity (realism and attention to detail), and any other factors you deem relevant. For each evaluation dimension, provide a score between 1-10 for both images (e.g., Image 1: 8/10, Image 2: 6/10) and provide a concise rationale for the score. Calculate the total score for each image by summing all dimension scores. Use a chain-of-thought process to detail your reasoning steps, and enclose all your detailed reasoning within <think> and </think> tags. Then, in the <answer> tag, output exactly one of the following strings: \'Image 1 is better\' or \'Image 2 is better\' based on the total scores. No additional text is allowed in the <answer> section.\n\nExample output format:\n<think>\n1. Semantic consistency: Image 1 (9/10) - ...; Image 2 (7/10) - ...\n2. Aesthetics: Image 2 (8/10) - ...; Image 1 (8/10) - ...\n3. Authenticity: Image 1 (8/10) - ...; Image 2 (5/10) - ...\n[Additional dimensions if any]: Image 2 (8/10) - ...; Image 1 (6/10) - ...\nTotal score:\nImage 1: 9+8+8+6=31\nImage 2: 7+8+5+8=28\n</think>\n<answer>Image 1 is better</answer>\n**Note: In the example above, scores and the final answer are placeholders meant only to demonstrate the format. Your actual evaluation should be based on the quality of two given images.**\n\nYour task is provided as follows:\nText Caption: [{prompt}]"
+template = get_unifiedreward_think_image_template()
+
+def load_eval_prompts(dataset, num_prompts, seed):
+    if num_prompts <= 0:
+        return []
+    total = len(dataset)
+    num_prompts = min(num_prompts, total)
+    rng = random.Random(seed)
+    indices = rng.sample(range(total), num_prompts)
+    samples = []
+    for idx in indices:
+        data_item = dataset.data_anno[idx]
+        prompt_embed_file = data_item["prompt_embed_path"]
+        pooled_prompt_embeds_file = data_item["pooled_prompt_embeds_path"]
+        text_ids_file = data_item["text_ids"]
+        prompt_embed = torch.load(
+            os.path.join(dataset.prompt_embed_dir, prompt_embed_file),
+            map_location="cpu",
+            weights_only=True,
+        )
+        pooled_prompt_embeds = torch.load(
+            os.path.join(dataset.pooled_prompt_embeds_dir, pooled_prompt_embeds_file),
+            map_location="cpu",
+            weights_only=True,
+        )
+        text_ids = torch.load(
+            os.path.join(dataset.text_ids_dir, text_ids_file),
+            map_location="cpu",
+            weights_only=True,
+        )
+        caption = data_item.get("caption", "")
+        samples.append((prompt_embed, pooled_prompt_embeds, text_ids, caption))
+    return samples
+
+
+def run_eval_images(
+    args,
+    transformer,
+    vae,
+    eval_prompts,
+    device,
+    output_dir,
+    step,
+    rank,
+    world_size,
+):
+    if not eval_prompts:
+        return
+    assigned_indices = [i for i in range(len(eval_prompts)) if i % world_size == rank]
+    if not assigned_indices:
+        return
+    eval_root = os.path.join(output_dir, "eval_image", f"{step}_step")
+    os.makedirs(eval_root, exist_ok=True)
+    sigma_schedule = torch.linspace(1, 0, args.sampling_steps + 1)
+    sigma_schedule = sd3_time_shift(args.shift, sigma_schedule)
+    image_processor = VaeImageProcessor(16)
+    latent_w, latent_h = args.w // 8, args.h // 8
+    if args.init_same_noise:
+        base_latents = torch.randn(
+            (1, 16, latent_h, latent_w),
+            device=device,
+            dtype=torch.bfloat16,
+        )
+    was_training = transformer.training
+    for idx in assigned_indices:
+        prompt_embed, pooled_prompt_embeds, text_ids, caption = eval_prompts[idx]
+        prompt_embed = prompt_embed.to(device)
+        pooled_prompt_embeds = pooled_prompt_embeds.to(device)
+        text_ids = text_ids.to(device)
+        if args.init_same_noise:
+            input_latents = base_latents
+        else:
+            input_latents = torch.randn(
+                (1, 16, latent_h, latent_w),
+                device=device,
+                dtype=torch.bfloat16,
+            )
+        input_latents_new = pack_latents(input_latents, 1, 16, latent_h, latent_w)
+        image_ids = prepare_latent_image_ids(1, latent_h // 2, latent_w // 2, device, torch.bfloat16)
+        progress_bar = tqdm(
+            range(0, args.sampling_steps),
+            desc=f"Eval Sampling {idx}",
+            disable=True,
+        )
+        with torch.no_grad():
+            if getattr(args, "rationorm", False):
+                _, latents, _, _, _ = run_sample_step(
+                    args,
+                    input_latents_new,
+                    progress_bar,
+                    sigma_schedule,
+                    transformer,
+                    prompt_embed.unsqueeze(0),
+                    pooled_prompt_embeds.unsqueeze(0),
+                    text_ids.unsqueeze(0),
+                    image_ids,
+                    True,
+                )
+            else:
+                _, latents, _, _ = run_sample_step(
+                    args,
+                    input_latents_new,
+                    progress_bar,
+                    sigma_schedule,
+                    transformer,
+                    prompt_embed.unsqueeze(0),
+                    pooled_prompt_embeds.unsqueeze(0),
+                    text_ids.unsqueeze(0),
+                    image_ids,
+                    True,
+                )
+        with torch.inference_mode():
+            with torch.autocast("cuda", dtype=torch.bfloat16):
+                latents = unpack_latents(latents, args.h, args.w, 8)
+                latents = (latents / 0.3611) + 0.1159
+                image = vae.decode(latents, return_dict=False)[0]
+                decoded_image = image_processor.postprocess(image)
+        safe_caption = "".join(
+            ch if ("0" <= ch <= "9" or "A" <= ch <= "Z" or "a" <= ch <= "z" or ch in "-_")
+            else "_"
+            for ch in str(caption)
+        )
+        safe_caption = safe_caption.encode("ascii", errors="ignore").decode("ascii")
+        safe_caption = safe_caption.strip("_")[:60] or "prompt"
+        save_path = os.path.join(
+            eval_root, f"sample_{idx:02d}_rank{rank}_{safe_caption}.png"
+        )
+        decoded_image[0].save(save_path)
+    if was_training:
+        transformer.train()
+    else:
+        transformer.eval()
 def assert_eq(x, y, msg=None):
     assert x == y, f"{msg or 'Assertion failed'}: {x} != {y}"
 
@@ -366,23 +500,26 @@ def sample_reference_model(
                 image = vae.decode(latents, return_dict=False)[0]
                 decoded_image = image_processor.postprocess(
                 image)
-        os.makedirs("images", exist_ok=True)
-        save_path = f"./images/flux_{rank}_{index}.png"
+        rollout_root = (
+            os.path.join(args.output_dir, "rollout")
+            if args.output_dir is not None
+            else "rollout"
+        )
+        os.makedirs(rollout_root, exist_ok=True)
+        save_path = os.path.join(rollout_root, f"flux_{rank}_{index}.png")
         decoded_image[0].save(save_path)
 
         if args.use_clip:
-            with torch.no_grad():
-                image_path = decoded_image[0]
-
-                text = tokenizer([batch_caption[0]]).to(device=device, non_blocking=True)
-                clip_image = preprocess_dgn5b(image_path).unsqueeze(0).to(device=device, non_blocking=True)
-                
-                clip_image_features = clip_model.encode_image(clip_image)
-                clip_text_features = clip_model.encode_text(text)
-                clip_image_features = F.normalize(clip_image_features, dim=-1)
-                clip_text_features = F.normalize(clip_text_features, dim=-1)
-                clip_score = clip_image_features @ clip_text_features.T
-                all_clip_rewards.append(clip_score[0])
+            image_path = decoded_image[0]
+            clip_score = compute_clip_score(
+                clip_model,
+                preprocess_dgn5b,
+                tokenizer,
+                image_path,
+                batch_caption[0],
+                device,
+            )
+            all_clip_rewards.append(clip_score)
 
         if args.use_unifiedreward_think:
             all_input_data.append({
@@ -808,13 +945,7 @@ def main(args):
     preprocess_dgn5b=None
 
     if args.use_clip:
-        import open_clip
-        clip_model, _, preprocess_dgn5b = open_clip.create_model_and_transforms('ViT-H-14', 
-            pretrained='./open_clip_pytorch_model.bin')
-        
-        processor = open_clip.get_tokenizer('ViT-H-14')
-        clip_model = clip_model.to(device)
-        clip_model.eval()
+        clip_model, preprocess_dgn5b, processor = init_clip_model(device)
 
     main_print(f"--> loading model from {args.pretrained_model_name_or_path}")
     # keep the master weight to float32
@@ -944,8 +1075,24 @@ def main(args):
 
     params_to_optimize = transformer.parameters()
     params_to_optimize = list(filter(lambda p: p.requires_grad, params_to_optimize))
+    ema = None
+    if getattr(args, "use_ema", False):
+        ema = EMAModuleWrapper(
+            params_to_optimize,
+            decay=args.ema_decay,
+            update_step_interval=args.ema_update_interval,
+            device=device,
+        )
 
     train_dataset = LatentDataset(args.data_json_path, args.num_latent_t, args.cfg, args.num_sample)
+    eval_prompts = None
+    if args.eval_every_steps > 0 and args.output_dir is not None:
+        seed = args.seed if args.seed is not None else 0
+        eval_prompts = load_eval_prompts(
+            train_dataset,
+            args.eval_num_prompts,
+            seed,
+        )
     sampler = DistributedSampler(
             train_dataset, rank=rank, num_replicas=world_size, shuffle=True, seed=args.sampler_seed
         )
@@ -1029,6 +1176,24 @@ def main(args):
     # print dtype
     main_print(f"  Master weight dtype: {transformer.parameters().__next__().dtype}")
 
+    if args.eval_every_steps > 0 and args.output_dir is not None and eval_prompts:
+        if ema is not None:
+            ema.copy_to(params_to_optimize, store_temp=True)
+        run_eval_images(
+            args,
+            transformer,
+            vae,
+            eval_prompts,
+            device,
+            args.output_dir,
+            0,
+            rank,
+            world_size,
+        )
+        if ema is not None:
+            ema.restore(params_to_optimize)
+        dist.barrier()
+
     # Potentially load in the weights and states from a previous save
     if args.resume_from_checkpoint:
         assert NotImplementedError("resume_from_checkpoint is not supported now.")
@@ -1048,6 +1213,14 @@ def main(args):
             sampler.set_epoch(epoch) # Crucial for distributed shuffling per epoch
 
         if epoch > 0:
+            ema_applied = False
+            if (
+                ema is not None
+                and getattr(args, "ema_use_in_checkpoint", True)
+                and epoch * step_per_epoch >= args.ema_start_step
+            ):
+                ema.copy_to(params_to_optimize, store_temp=True)
+                ema_applied = True
             if getattr(args, "use_lora", False):
                 save_lora_checkpoint(
                     transformer,
@@ -1062,6 +1235,8 @@ def main(args):
                 save_checkpoint(
                     transformer, rank, args.output_dir, epoch * step_per_epoch, epoch - 1
                 )
+            if ema_applied:
+                ema.restore(params_to_optimize)
             dist.barrier()
             
         for step in range(init_steps + epoch * step_per_epoch + 1, (epoch+1) * step_per_epoch+1):
@@ -1070,6 +1245,14 @@ def main(args):
                 transformer.eval()
                 dist.barrier()
 
+                ema_applied = False
+                if (
+                    ema is not None
+                    and getattr(args, "ema_use_in_checkpoint", True)
+                    and step >= args.ema_start_step
+                ):
+                    ema.copy_to(params_to_optimize, store_temp=True)
+                    ema_applied = True
                 if getattr(args, "use_lora", False):
                     save_lora_checkpoint(
                         transformer,
@@ -1082,7 +1265,8 @@ def main(args):
                     )
                 else:
                     save_checkpoint(transformer, rank, args.output_dir, step, epoch)
-                
+                if ema_applied:
+                    ema.restore(params_to_optimize)
                 dist.barrier()
                 transformer.train()
 
@@ -1102,6 +1286,31 @@ def main(args):
                 noise_scheduler,
                 args.max_grad_norm
             )
+            if ema is not None and step >= args.ema_start_step:
+                ema.step(params_to_optimize, step)
+            if (
+                args.eval_every_steps > 0
+                and args.output_dir is not None
+                and eval_prompts
+                and step > 0
+                and step % args.eval_every_steps == 0
+            ):
+                if ema is not None:
+                    ema.copy_to(params_to_optimize, store_temp=True)
+                run_eval_images(
+                    args,
+                    transformer,
+                    vae,
+                    eval_prompts,
+                    device,
+                    args.output_dir,
+                    step,
+                    rank,
+                    world_size,
+                )
+                if ema is not None:
+                    ema.restore(params_to_optimize)
+                dist.barrier()
     
             step_time = time.time() - start_time
             step_times.append(step_time)
@@ -1170,6 +1379,36 @@ def build_parser():
     # diffusion setting
     parser.add_argument("--ema_decay", type=float, default=0.995)
     parser.add_argument("--ema_start_step", type=int, default=0)
+    parser.add_argument(
+        "--use_ema",
+        action="store_true",
+        default=False,
+        help="Enable EMA tracking for trainable parameters.",
+    )
+    parser.add_argument(
+        "--ema_update_interval",
+        type=int,
+        default=1,
+        help="Number of optimizer steps between EMA updates.",
+    )
+    parser.add_argument(
+        "--ema_use_in_checkpoint",
+        action="store_true",
+        default=False,
+        help="Save checkpoints using EMA weights instead of live weights.",
+    )
+    parser.add_argument(
+        "--eval_every_steps",
+        type=int,
+        default=10,
+        help="Run eval every N steps (0 disables).",
+    )
+    parser.add_argument(
+        "--eval_num_prompts",
+        type=int,
+        default=32,
+        help="Number of prompts to sample for eval images.",
+    )
     parser.add_argument("--cfg", type=float, default=0.0)
     parser.add_argument(
         "--precondition_outputs",

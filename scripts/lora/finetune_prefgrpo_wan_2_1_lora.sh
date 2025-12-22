@@ -22,7 +22,7 @@ TRAIN_ARGS=(
   --exp_name "${EXP_NAME}"
   --train_batch_size 1
   --dataloader_num_workers 4
-  --learning_rate 1e-4
+  --learning_rate 5e-5
   --output_dir "${OUTPUT_DIR}"
   --h 240
   --w 416
@@ -40,7 +40,10 @@ TRAIN_ARGS=(
   --kl_beta 0.004
   --lora_alpha 128
   --lora_rank 64
-  --kl_beta 0.004
+  --use_ema
+  --ema_update_interval 1
+  --ema_decay 0.99
+  --ema_use_in_checkpoint
 )
 
 torchrun --nnodes=2 --nproc_per_node=8 --node_rank="${INDEX}" --master_addr="${CHIEF_IP}" --master_port=8081 \

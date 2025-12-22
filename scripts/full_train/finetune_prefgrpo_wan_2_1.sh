@@ -37,6 +37,10 @@ TRAIN_ARGS=(
   --api_url "${API_URL}"
   --checkpointing_steps 20
   --rationorm
+  --use_ema
+  --ema_update_interval 1
+  --ema_decay 0.99
+  --ema_use_in_checkpoint
 )
 
 torchrun --nnodes=2 --nproc_per_node=8 --node_rank="${INDEX}" --master_addr="${CHIEF_IP}" --master_port=8081 \

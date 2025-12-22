@@ -12,6 +12,7 @@
 import argparse
 import json
 import os
+import random
 from fastvideo.utils.parallel_states import (
     initialize_sequence_parallel_state,
     destroy_sequence_parallel_group,
@@ -50,6 +51,7 @@ from contextlib import contextmanager
 from safetensors.torch import load_file, save_file
 from vllm_utils.vllm_request import evaluate_batch
 from fastvideo.rewards.unifiedreward import extract_normalized_rewards
+from fastvideo.rewards.templates import get_unifiedreward_image_template
 from fastvideo.grpo.kl import compute_kl_loss, disable_lora_adapters
 from fastvideo.grpo.steps import dance_grpo_step, flow_grpo_step, sd3_time_shift
 from peft import LoraConfig, get_peft_model_state_dict, set_peft_model_state_dict
@@ -152,24 +154,145 @@ def save_qwenimage_lora_checkpoint(transformer, optimizer, rank, output_dir, ste
         json.dump(lora_config, f, indent=4)
     main_print(f"--> LoRA checkpoint saved at {save_dir}")
 
-template = (
-    "You are presented with a generated image and its associated text caption. Your task is to analyze the image across multiple dimensions in relation to the caption. Specifically:\n\n"
-    "1. Evaluate each word in the caption based on how well it is visually represented in the image. Assign a numerical score to each word using the format:\n"
-    "   Word-wise Scores: [[\"word1\", score1], [\"word2\", score2], ..., [\"wordN\", scoreN], [\"[No_mistakes]\", scoreM]]\n"
-    "   - A higher score indicates that the word is less well represented in the image.\n"
-    "   - The special token [No_mistakes] represents whether all elements in the caption were correctly depicted. A high score suggests no mistakes; a low score suggests missing or incorrect elements.\n\n"
-    "2. Provide overall assessments for the image along the following axes (each rated from 1 to 5):\n"
-    "- Alignment Score: How well the image matches the caption in terms of content.\n"
-    "- Coherence Score: How logically consistent the image is (absence of visual glitches, object distortions, etc.).\n"
-    "- Style Score: How aesthetically appealing the image looks, regardless of caption accuracy.\n\n"
-    "Output your evaluation using the format below:\n\n"
-    "---\n\n"
-    "Word-wise Scores: [[\"word1\", score1], ..., [\"[No_mistakes]\", scoreM]]\n\n"
-    "Alignment Score (1-5): X\n"
-    "Coherence Score (1-5): Y\n"
-    "Style Score (1-5): Z\n\n"
-    "Your task is provided as follows:\nText Caption: [{prompt}]"
+template = get_unifiedreward_image_template()
+
+
+def load_eval_prompts(dataset, num_prompts, seed):
+    if num_prompts <= 0:
+        return []
+    total = len(dataset)
+    num_prompts = min(num_prompts, total)
+    rng = random.Random(seed)
+    indices = rng.sample(range(total), num_prompts)
+    samples = []
+    for idx in indices:
+        data_item = dataset.data_anno[idx]
+        prompt_embed_file = data_item["prompt_embed_path"]
+        prompt_attention_mask_file = data_item["prompt_attention_mask"]
+        prompt_embed = torch.load(
+            os.path.join(dataset.prompt_embed_dir, prompt_embed_file),
+            map_location="cpu",
+            weights_only=True,
+        )
+        prompt_attention_mask = torch.load(
+            os.path.join(dataset.prompt_attention_mask_dir, prompt_attention_mask_file),
+            map_location="cpu",
+            weights_only=True,
+        )
+        caption = data_item.get("caption", "")
+        original_length = int(data_item.get("original_length", prompt_attention_mask.shape[0]))
+        samples.append((prompt_embed, prompt_attention_mask, caption, original_length))
+    return samples
+
+
+def run_eval_images(
+    args,
+    transformer,
+    vae,
+    eval_prompts,
+    device,
+    output_dir,
+    step,
+    rank,
+    world_size,
+):
+    if not eval_prompts:
+        return
+    assigned_indices = [i for i in range(len(eval_prompts)) if i % world_size == rank]
+    if not assigned_indices:
+        return
+    eval_root = os.path.join(output_dir, "eval_image", f"{step}_step")
+    os.makedirs(eval_root, exist_ok=True)
+    sigma_schedule = torch.linspace(1, 0, args.sampling_steps + 1)
+    sigma_schedule = sd3_time_shift(args.shift, sigma_schedule)
+    image_processor = VaeImageProcessor(16)
+    latent_w, latent_h = args.w // 8, args.h // 8
+    if args.init_same_noise:
+        base_latents = torch.randn(
+            (1, 1, 16, latent_h, latent_w),
+            device=device,
+            dtype=torch.bfloat16,
+        )
+    was_training = transformer.training
+    for idx in assigned_indices:
+        prompt_embed, prompt_attention_mask, caption, original_length = eval_prompts[idx]
+        prompt_embed = prompt_embed[:original_length].unsqueeze(0).to(device)
+        prompt_attention_mask = prompt_attention_mask[:original_length].unsqueeze(0).to(device)
+        if args.init_same_noise:
+            input_latents = base_latents
+        else:
+            input_latents = torch.randn(
+                (1, 1, 16, latent_h, latent_w),
+                device=device,
+                dtype=torch.bfloat16,
             )
+        packed_height = 2 * (int(args.h) // (8 * 2))
+        packed_width = 2 * (int(args.w) // (8 * 2))
+        input_latents_new = pack_latents(input_latents, 1, 16, packed_height, packed_width)
+        txt_seq_lens = [int(prompt_attention_mask.sum().item())]
+        img_shapes = [[(1, args.h // 8 // 2, args.w // 8 // 2)]]
+        progress_bar = tqdm(
+            range(0, args.sampling_steps),
+            desc=f"Eval Sampling {idx}",
+            disable=True,
+        )
+        with torch.no_grad():
+            if getattr(args, "rationorm", False):
+                _, latents, _, _, _ = run_sample_step(
+                    args,
+                    input_latents_new.clone(),
+                    progress_bar,
+                    sigma_schedule,
+                    transformer,
+                    prompt_embed,
+                    prompt_attention_mask,
+                    img_shapes,
+                    txt_seq_lens,
+                    True,
+                )
+            else:
+                _, latents, _, _ = run_sample_step(
+                    args,
+                    input_latents_new.clone(),
+                    progress_bar,
+                    sigma_schedule,
+                    transformer,
+                    prompt_embed,
+                    prompt_attention_mask,
+                    img_shapes,
+                    txt_seq_lens,
+                    True,
+                )
+        with torch.inference_mode():
+            with torch.autocast("cuda", dtype=torch.bfloat16):
+                latents = unpack_latents(latents, args.h, args.w, 8)
+                latents = latents.to(vae.dtype)
+                latents_mean = (
+                    torch.tensor(vae.config.latents_mean)
+                    .view(1, vae.config.z_dim, 1, 1, 1)
+                    .to(latents.device, latents.dtype)
+                )
+                latents_std = 1.0 / torch.tensor(vae.config.latents_std).view(
+                    1, vae.config.z_dim, 1, 1, 1
+                ).to(latents.device, latents.dtype)
+                latents = latents / latents_std + latents_mean
+                image = vae.decode(latents, return_dict=False)[0][:, :, 0]
+                decoded_image = image_processor.postprocess(image)
+        safe_caption = "".join(
+            ch if ("0" <= ch <= "9" or "A" <= ch <= "Z" or "a" <= ch <= "z" or ch in "-_")
+            else "_"
+            for ch in str(caption)
+        )
+        safe_caption = safe_caption.encode("ascii", errors="ignore").decode("ascii")
+        safe_caption = safe_caption.strip("_")[:60] or "prompt"
+        save_path = os.path.join(
+            eval_root, f"sample_{idx:02d}_rank{rank}_{safe_caption}.png"
+        )
+        decoded_image[0].save(save_path)
+    if was_training:
+        transformer.train()
+    else:
+        transformer.eval()
 class FSDP_EMA:
     def __init__(self, model, decay, rank):
         self.decay = decay
@@ -523,8 +646,13 @@ def sample_reference_model(
                 latents = latents / latents_std + latents_mean
                 image = vae.decode(latents, return_dict=False)[0][:, :, 0]
                 decoded_image = image_processor.postprocess(image)
-        os.makedirs("images", exist_ok=True)
-        save_path = f"./images/qwenimage_{rank}_{index}.png"
+        rollout_root = (
+            os.path.join(args.output_dir, "rollout")
+            if args.output_dir is not None
+            else "rollout"
+        )
+        os.makedirs(rollout_root, exist_ok=True)
+        save_path = os.path.join(rollout_root, f"qwenimage_{rank}_{index}.png")
         decoded_image[0].save(save_path)
 
         if args.use_unifiedreward:
@@ -1019,6 +1147,14 @@ def main(args):
     
 
     train_dataset = LatentDataset(args.data_json_path, args.num_latent_t, args.cfg)
+    eval_prompts = None
+    if args.eval_every_steps > 0 and args.output_dir is not None:
+        seed = args.seed if args.seed is not None else 0
+        eval_prompts = load_eval_prompts(
+            train_dataset,
+            args.eval_num_prompts,
+            seed,
+        )
     sampler = DistributedSampler(
             train_dataset, rank=rank, num_replicas=world_size, shuffle=True, seed=args.sampler_seed
         )
@@ -1082,6 +1218,34 @@ def main(args):
     # print dtype
     main_print(f"  Master weight dtype: {transformer.parameters().__next__().dtype}")
 
+    if args.eval_every_steps > 0 and args.output_dir is not None and eval_prompts:
+        if args.use_ema and ema_handler is not None:
+            with ema_handler.use_ema_weights(transformer):
+                run_eval_images(
+                    args,
+                    transformer,
+                    vae,
+                    eval_prompts,
+                    device,
+                    args.output_dir,
+                    0,
+                    rank,
+                    world_size,
+                )
+        else:
+            run_eval_images(
+                args,
+                transformer,
+                vae,
+                eval_prompts,
+                device,
+                args.output_dir,
+                0,
+                rank,
+                world_size,
+            )
+        dist.barrier()
+
     # Potentially load in the weights and states from a previous save
     if args.resume_from_checkpoint:
         assert NotImplementedError("resume_from_checkpoint is not supported now.")
@@ -1104,19 +1268,50 @@ def main(args):
             sampler.set_epoch(epoch) # Crucial for distributed shuffling per epoch
         
         if epoch > 0:
+            use_ema_for_ckpt = (
+                args.use_ema
+                and ema_handler is not None
+                and getattr(args, "ema_use_in_checkpoint", True)
+                and epoch * step_per_epoch >= args.ema_start_step
+            )
             if getattr(args, "use_lora", False):
-                save_qwenimage_lora_checkpoint(
-                    transformer,
-                    optimizer,
-                    rank,
-                    args.output_dir,
-                    epoch * step_per_epoch,
-                    epoch - 1,
-                )
+                if use_ema_for_ckpt:
+                    with ema_handler.use_ema_weights(transformer):
+                        save_qwenimage_lora_checkpoint(
+                            transformer,
+                            optimizer,
+                            rank,
+                            args.output_dir,
+                            epoch * step_per_epoch,
+                            epoch - 1,
+                        )
+                else:
+                    save_qwenimage_lora_checkpoint(
+                        transformer,
+                        optimizer,
+                        rank,
+                        args.output_dir,
+                        epoch * step_per_epoch,
+                        epoch - 1,
+                    )
             else:
-                save_checkpoint(
-                    transformer, rank, args.output_dir, epoch * step_per_epoch, epoch - 1
-                )
+                if use_ema_for_ckpt:
+                    with ema_handler.use_ema_weights(transformer):
+                        save_checkpoint(
+                            transformer,
+                            rank,
+                            args.output_dir,
+                            epoch * step_per_epoch,
+                            epoch - 1,
+                        )
+                else:
+                    save_checkpoint(
+                        transformer,
+                        rank,
+                        args.output_dir,
+                        epoch * step_per_epoch,
+                        epoch - 1,
+                    )
             dist.barrier()
 
         for step, (prompt_embeds, prompt_attention_masks, caption, original_length) in enumerate(train_dataloader):
@@ -1124,12 +1319,30 @@ def main(args):
             prompt_attention_masks = prompt_attention_masks.to(device)
             start_time = time.time()
             if (step-1) % args.checkpointing_steps == 0 and step!=1:
+                use_ema_for_ckpt = (
+                    args.use_ema
+                    and ema_handler is not None
+                    and getattr(args, "ema_use_in_checkpoint", True)
+                    and step >= args.ema_start_step
+                )
                 if getattr(args, "use_lora", False):
-                    save_qwenimage_lora_checkpoint(
-                        transformer, optimizer, rank, args.output_dir, step, epoch
-                    )
+                    if use_ema_for_ckpt:
+                        with ema_handler.use_ema_weights(transformer):
+                            save_qwenimage_lora_checkpoint(
+                                transformer, optimizer, rank, args.output_dir, step, epoch
+                            )
+                    else:
+                        save_qwenimage_lora_checkpoint(
+                            transformer, optimizer, rank, args.output_dir, step, epoch
+                        )
                 else:
-                    save_checkpoint(transformer, rank, args.output_dir, step, epoch)
+                    if use_ema_for_ckpt:
+                        with ema_handler.use_ema_weights(transformer):
+                            save_checkpoint(
+                                transformer, rank, args.output_dir, step, epoch
+                            )
+                    else:
+                        save_checkpoint(transformer, rank, args.output_dir, step, epoch)
                 if args.use_ema:
                     save_ema_checkpoint(ema_handler, rank, args.output_dir, step, epoch, dict(transformer.config))
 
@@ -1158,6 +1371,40 @@ def main(args):
 
             if args.use_ema and ema_handler:
                 ema_handler.update(transformer)
+            global_step = epoch * step_per_epoch + step
+            if (
+                args.eval_every_steps > 0
+                and args.output_dir is not None
+                and eval_prompts
+                and global_step > 0
+                and global_step % args.eval_every_steps == 0
+            ):
+                if args.use_ema and ema_handler is not None:
+                    with ema_handler.use_ema_weights(transformer):
+                        run_eval_images(
+                            args,
+                            transformer,
+                            vae,
+                            eval_prompts,
+                            device,
+                            args.output_dir,
+                            global_step,
+                            rank,
+                            world_size,
+                        )
+                else:
+                    run_eval_images(
+                        args,
+                        transformer,
+                        vae,
+                        eval_prompts,
+                        device,
+                        args.output_dir,
+                        global_step,
+                        rank,
+                        world_size,
+                    )
+                dist.barrier()
     
             step_time = time.time() - start_time
             step_times.append(step_time)
@@ -1172,7 +1419,6 @@ def main(args):
             )
             progress_bar.update(1)
             if rank <= 0:
-                global_step = epoch * step_per_epoch + step
                 dim_reward_log = {k: np.mean(v) for k, v in dim_reward.items()}
                 dim_reward_log.update({f"{k}_std": np.std(v) for k, v in dim_reward.items()})
 
@@ -1227,6 +1473,18 @@ def build_parser():
     # diffusion setting
     parser.add_argument("--ema_decay", type=float, default=0.995)
     parser.add_argument("--ema_start_step", type=int, default=0)
+    parser.add_argument(
+        "--eval_every_steps",
+        type=int,
+        default=10,
+        help="Run eval every N steps (0 disables).",
+    )
+    parser.add_argument(
+        "--eval_num_prompts",
+        type=int,
+        default=32,
+        help="Number of prompts to sample for eval images.",
+    )
     parser.add_argument("--cfg", type=float, default=0.0)
     parser.add_argument(
         "--precondition_outputs",
@@ -1523,6 +1781,12 @@ def build_parser():
         "--use_ema", 
         action="store_true", 
         help="Enable Exponential Moving Average of model weights."
+    )
+    parser.add_argument(
+        "--ema_use_in_checkpoint",
+        action="store_true",
+        default=False,
+        help="Save checkpoints using EMA weights instead of live weights.",
     )
     parser.add_argument(
         "--grpo_step_mode",
