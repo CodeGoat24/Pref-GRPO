@@ -39,6 +39,8 @@ from fastvideo.utils.checkpoint import (
     resume_lora_optimizer,
 )
 from fastvideo.utils.logging_ import main_print
+from fastvideo.utils.config_io import dump_args_yaml
+from fastvideo.utils.rollout_io import save_rollout_image
 from diffusers.image_processor import VaeImageProcessor
 from peft import LoraConfig, get_peft_model_state_dict, set_peft_model_state_dict
 
@@ -50,9 +52,11 @@ from typing import List
 from fastvideo.utils.fsdp_util_qwenimage import fsdp_wrapper, FSDPConfig
 from contextlib import contextmanager
 from safetensors.torch import load_file, save_file
-from fastvideo.rewards.unifiedreward_think import cal_win_rate_images
-from fastvideo.rewards.clip_reward import init_clip_model, compute_clip_score
-from fastvideo.rewards.templates import get_unifiedreward_think_image_template
+from fastvideo.rewards.dispatcher import (
+    compute_weighted_advantages,
+    parse_reward_spec,
+    RewardDispatcher,
+)
 from fastvideo.grpo.kl import compute_kl_loss, disable_lora_adapters
 from fastvideo.grpo.steps import dance_grpo_step, flow_grpo_step, sd3_time_shift
 
@@ -61,6 +65,11 @@ def _parse_lora_target_modules(arg: str) -> List[str]:
         return []
     parts = [p.strip() for p in arg.split(",")]
     return [p for p in parts if p]
+
+def _reward_project_name(args, base):
+    reward_names = "_".join(sorted(args.reward_weights.keys()))
+    suffix = "_lora" if getattr(args, "use_lora", False) else ""
+    return f"{base}_{reward_names}{suffix}"
 
 
 def _ensure_only_lora_trainable(transformer):
@@ -153,7 +162,6 @@ def save_qwenimage_lora_checkpoint(transformer, optimizer, rank, output_dir, ste
         json.dump(lora_config, f, indent=4)
     main_print(f"--> LoRA checkpoint saved at {save_dir}")
 
-template = get_unifiedreward_think_image_template()
 
 def load_eval_prompts(dataset, num_prompts, seed):
     if num_prompts <= 0:
@@ -519,12 +527,8 @@ def sample_reference_model(
     encoder_hidden_states, 
     prompt_attention_masks, 
     original_length,
-    reward_model,
-    clip_model,
-    preprocess_dgn5b,
-    tokenizer,
+    reward_dispatcher,
     caption,
-    preprocess_val,
 ):
     w, h, t = args.w, args.h, args.t
     sample_steps = args.sampling_steps
@@ -549,11 +553,8 @@ def sample_reference_model(
     all_latents = []
     all_log_probs = []
     all_prev_sample_mean = [] if getattr(args, "rationorm", False) else None
-    all_rewards = []  
-    all_clip_rewards = []
     all_txt_seq_lens = []
-    all_input_data = []
-    dim_reward ={}
+    reward_inputs = reward_dispatcher.build_reward_inputs()
     if args.init_same_noise:
         input_latents = torch.randn(
                 (1, 1, IN_CHANNELS, latent_h, latent_w),  #（c,t,h,w)
@@ -631,64 +632,30 @@ def sample_reference_model(
                 latents = latents / latents_std + latents_mean
                 image = vae.decode(latents, return_dict=False)[0][:, :, 0]
                 decoded_image = image_processor.postprocess(image)
-        rollout_root = (
-            os.path.join(args.output_dir, "rollout")
-            if args.output_dir is not None
-            else "rollout"
+        save_path = save_rollout_image(
+            decoded_image[0],
+            args.output_dir,
+            f"qwenimage_{rank}_{index}.png",
         )
-        os.makedirs(rollout_root, exist_ok=True)
-        save_path = os.path.join(rollout_root, f"qwenimage_{rank}_{index}.png")
-        decoded_image[0].save(save_path)
 
-        if args.use_clip:
-            image_path = decoded_image[0]
-            clip_score = compute_clip_score(
-                clip_model,
-                preprocess_dgn5b,
-                tokenizer,
-                image_path,
-                batch_caption[0],
-                device,
+        for reward_name in reward_inputs:
+            reward_inputs[reward_name].append(
+                {"path": save_path, "prompt": batch_caption[0]}
             )
-            all_clip_rewards.append(clip_score)
-                
-        if args.use_unifiedreward_think:
-            all_input_data.append({
-                "images": save_path,
-                "problem": template.format(prompt=batch_caption[0])
-            })
 
         
-    if args.use_unifiedreward_think:
-        with torch.no_grad():
-            with torch.amp.autocast('cuda'):
-                all_rewards, dim_reward = cal_win_rate_images(
-                    all_input_data, api_url=args.api_url
-                )
+    reward_tensors, dim_reward = reward_dispatcher.compute_rewards(reward_inputs)
 
     all_latents = torch.cat(all_latents, dim=0)
     all_log_probs = torch.cat(all_log_probs, dim=0)
     if getattr(args, "rationorm", False):
         all_prev_sample_mean = torch.cat(all_prev_sample_mean, dim=0)
 
-    if args.use_unifiedreward_think:
-        all_rewards = torch.cat(all_rewards, dim=0)
-    else:
-        all_rewards = torch.zeros(B, dtype=torch.float32, device=device)
-
-    if args.use_clip:
-        dim_reward.update({"CLIP_score": torch.cat(all_clip_rewards).cpu().numpy()})
-        all_clip_rewards = torch.cat(all_clip_rewards, dim=0)
-    else:
-        all_clip_rewards = torch.zeros(B, dtype=torch.float32, device=device)
-
-
     all_txt_seq_lens = torch.cat(all_txt_seq_lens, dim=0)
     
     if getattr(args, "rationorm", False):
         return (
-            all_rewards,
-            all_clip_rewards,
+            reward_tensors,
             all_latents,
             all_log_probs,
             all_prev_sample_mean,
@@ -696,7 +663,7 @@ def sample_reference_model(
             all_txt_seq_lens,
             dim_reward,
         )
-    return all_rewards, all_clip_rewards, all_latents, all_log_probs, sigma_schedule, all_txt_seq_lens, dim_reward
+    return reward_tensors, all_latents, all_log_probs, sigma_schedule, all_txt_seq_lens, dim_reward
 
 
 def gather_tensor(tensor):
@@ -713,10 +680,7 @@ def train_one_step(
     transformer,
     ref_transformer,
     vae,
-    reward_model,
-    clip_model,
-    preprocess_dgn5b,
-    tokenizer,
+    reward_dispatcher,
     optimizer,
     lr_scheduler,
     prompt_embeds, 
@@ -725,7 +689,6 @@ def train_one_step(
     original_length,
     noise_scheduler,
     max_grad_norm,
-    preprocess_val,
     ema_handler
 ):
     total_loss = 0.0
@@ -752,8 +715,7 @@ def train_one_step(
 
     if getattr(args, "rationorm", False):
         (
-            winrate_rewards,
-            clip_rewards,
+            reward_tensors,
             all_latents,
             all_log_probs,
             all_prev_sample_mean,
@@ -768,15 +730,11 @@ def train_one_step(
             encoder_hidden_states,
             prompt_attention_masks,
             original_length,
-            reward_model,
-            clip_model,
-            preprocess_dgn5b,
-            tokenizer,
+            reward_dispatcher,
             caption,
-            preprocess_val,
         )
     else:
-        winrate_rewards, clip_rewards, all_latents, all_log_probs, sigma_schedule, all_txt_seq_lens, dim_reward = sample_reference_model(
+        reward_tensors, all_latents, all_log_probs, sigma_schedule, all_txt_seq_lens, dim_reward = sample_reference_model(
             args,
             device,
             transformer,
@@ -784,12 +742,8 @@ def train_one_step(
             encoder_hidden_states,
             prompt_attention_masks,
             original_length,
-            reward_model,
-            clip_model,
-            preprocess_dgn5b,
-            tokenizer,
+            reward_dispatcher,
             caption,
-            preprocess_val,
         )
     batch_size = all_latents.shape[0]
     timestep_value = [int(sigma * 1000) for sigma in sigma_schedule][:args.sampling_steps]
@@ -806,8 +760,10 @@ def train_one_step(
             :, 1:
         ][:, :-1],  # each entry is the latent after timestep t
         "log_probs": all_log_probs[:, :-1],
-        "rewards": winrate_rewards.to(torch.float32),
-        "clip_rewards": clip_rewards.to(torch.float32),
+        **{
+            f"reward_{name}": rewards.to(torch.float32)
+            for name, rewards in reward_tensors.items()
+        },
         "txt_seq_lens": all_txt_seq_lens,
         "encoder_hidden_states": encoder_hidden_states,
         "prompt_attention_masks": prompt_attention_masks,
@@ -815,59 +771,19 @@ def train_one_step(
     }
     if getattr(args, "rationorm", False):
         samples["prev_sample_mean"] = all_prev_sample_mean[:, :-1]
-    gathered_reward = gather_tensor(samples["rewards"])
-    gathered_clip_reward = gather_tensor(samples["clip_rewards"])
-
-    if dist.get_rank()==0:
-        print("gathered_reward", gathered_reward)
-        print("gathered_clip_reward", gathered_clip_reward)
+    if dist.get_rank() == 0:
+        for name, rewards in reward_tensors.items():
+            gathered_reward = gather_tensor(rewards)
+            print(f"gathered_{name}_reward", gathered_reward)
 
     #计算advantage
-    if args.use_group:
-        n = len(samples["rewards"]) // (args.num_generations)
-        advantages = torch.zeros_like(samples["rewards"])
-        clip_advantages = torch.zeros_like(samples["clip_rewards"])
-        
-        for i in range(n):
-            if args.use_unifiedreward_think:
-                start_idx = i * args.num_generations
-                end_idx = (i + 1) * args.num_generations
-                group_rewards = samples["rewards"][start_idx:end_idx]
-                group_mean = group_rewards.mean()
-                group_std = group_rewards.std() + 1e-8
-                advantages[start_idx:end_idx] = (group_rewards - group_mean) / group_std
-
-            if args.use_clip:
-                start_idx = i * args.num_generations
-                end_idx = (i + 1) * args.num_generations
-                group_clip_rewards = samples["clip_rewards"][start_idx:end_idx]
-                group_clip_mean = group_clip_rewards.mean()
-                group_clip_std = group_clip_rewards.std() + 1e-8
-                clip_advantages[start_idx:end_idx] = (group_clip_rewards - group_clip_mean) / group_clip_std
-
-        
-        if args.use_unifiedreward_think and args.use_clip:
-            samples["advantages"] = 0.7 * advantages + 1.4 * clip_advantages
-        elif args.use_unifiedreward_think:
-            samples["advantages"] = advantages
-        elif args.use_clip:
-            samples["advantages"] = clip_advantages
-    else:
-        advantages = torch.zeros_like(samples["rewards"])
-        clip_advantages = torch.zeros_like(samples["clip_rewards"])
-        
-        if args.use_unifiedreward_think:
-            advantages = (samples["rewards"] - gathered_reward.mean())/(gathered_reward.std()+1e-8)
-        
-        if args.use_clip:
-            clip_advantages = (samples["clip_rewards"] - gathered_clip_reward.mean())/(gathered_clip_reward.std()+1e-8)
-
-        if args.use_unifiedreward_think and args.use_clip:
-            samples["advantages"] = 0.7 * advantages + 1.4 * clip_advantages
-        elif args.use_unifiedreward_think:
-            samples["advantages"] = advantages
-        elif args.use_clip:
-            samples["advantages"] = clip_advantages
+    samples["advantages"], _ = compute_weighted_advantages(
+        reward_tensors,
+        args.reward_weights,
+        gather_tensor=gather_tensor,
+        use_group=args.use_group,
+        num_generations=args.num_generations,
+    )
 
 
     
@@ -1025,8 +941,8 @@ def train_one_step(
             lr_scheduler.step()
             optimizer.zero_grad()
         if dist.get_rank()%8==0:
-            print("winrate_reward", sample["rewards"].item())
-            print("clip_reward", sample["clip_rewards"].item())
+            for name in reward_tensors.keys():
+                print(f"{name}_reward", sample[f"reward_{name}"].item())
             print("ratio", ratio)
             print("advantage", sample["advantages"].item())
             if args.kl_beta > 0 and kl_loss is not None:
@@ -1060,14 +976,18 @@ def main(args):
 
     # For mixed precision training we cast all non-trainable weigths to half-precision
     # as these weights are only used for inference, keeping weights in full precision is not required
-    processor=None
-    reward_model=None
-    clip_model=None
-    preprocess_dgn5b=None
-    preprocess_val=None
-
-    if args.use_clip:
-        clip_model, preprocess_dgn5b, processor = init_clip_model(device)
+    reward_weights = parse_reward_spec(args.reward_spec)
+    if not reward_weights:
+        raise ValueError("No rewards configured; set --reward_spec.")
+    args.reward_weights = reward_weights
+    if rank <= 0:
+        dump_args_yaml(args, args.output_dir)
+    reward_dispatcher = RewardDispatcher(
+        args=args,
+        device=device,
+        reward_weights=reward_weights,
+        modality="image",
+    )
     
 
     main_print(f"--> loading model from {args.pretrained_model_name_or_path}")
@@ -1221,7 +1141,7 @@ def main(args):
         last_epoch=init_steps - 1,
     )
     if rank <= 0:
-        project = "pref_qwenimage_lora" if getattr(args, "use_lora", False) else "pref_qwenimage"
+        project = _reward_project_name(args, "qwenimage")
         wandb.init(project=project, config=args, name=args.exp_name)
 
     # Train!
@@ -1382,10 +1302,7 @@ def main(args):
                 transformer,
                 ref_transformer,
                 vae,
-                reward_model,
-                clip_model,
-                preprocess_dgn5b,
-                processor,
+                reward_dispatcher,
                 optimizer,
                 lr_scheduler,
                 prompt_embeds, 
@@ -1394,7 +1311,6 @@ def main(args):
                 original_length,
                 noise_scheduler,
                 args.max_grad_norm,
-                preprocess_val,
                 ema_handler,
             )
 
@@ -1592,12 +1508,6 @@ def build_parser():
 
     # optimizer & scheduler & Training
     parser.add_argument(
-        "--max_train_steps",
-        type=int,
-        default=None,
-        help="Total number of training steps to perform.  If provided, overrides num_train_epochs.",
-    )
-    parser.add_argument(
         "--gradient_accumulation_steps",
         type=int,
         default=1,
@@ -1747,24 +1657,6 @@ def build_parser():
         help="num_generations per prompt",
     )
     parser.add_argument(
-        "--use_clip",
-        action="store_true",
-        default=False,
-        help="whether use clip as reward model",
-    )
-    parser.add_argument(
-        "--use_pickscore",
-        action="store_true",
-        default=False,
-        help="whether use pickscore as reward model",
-    )
-    parser.add_argument(
-        "--use_hpsv3",
-        action="store_true",
-        default=False,
-        help="whether use hpsv3 as reward model",
-    )
-    parser.add_argument(
         "--ignore_last",
         action="store_true",
         default=False,
@@ -1842,10 +1734,10 @@ def build_parser():
         help="api address for requesting UnifiedReward",
     )
     parser.add_argument(
-        "--use_unifiedreward_think",
-        action="store_true",
-        default=False,
-        help="whether use UnifiedReward-Think as reward model",
+        "--reward_spec",
+        type=str,
+        default=None,
+        help="reward spec as JSON or name:weight list",
     )
     parser.add_argument(
         "--lr_warmup_ratio",

@@ -5,7 +5,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/../_common_finetune.sh"
 
-wandb_offline ""
+wandb_online ""
 
 
 export EXP_NAME="pref_wan2_1_lora"
@@ -22,30 +22,24 @@ TRAIN_ARGS=(
   --exp_name "${EXP_NAME}"
   --train_batch_size 1
   --dataloader_num_workers 4
-  --learning_rate 5e-5
+  --learning_rate 2e-5
   --output_dir "${OUTPUT_DIR}"
   --h 240
   --w 416
   --t 33
   --sampling_steps 20
   --eta 0.7
-  --gradient_accumulation_steps 3
-  --num_generations 9
+  --gradient_accumulation_steps 32
+  --num_generations 6
   --cfg_infer 5.0
-  --use_unifiedreward_think
-  --use_clip
+  --reward_spec '{"unifiedreward_think": 0.4, "clip": 0.6}'
   --api_url "${API_URL}"
   --checkpointing_steps 20
-  --clip_range 1e-3
   --kl_beta 0.004
   --lora_alpha 128
   --lora_rank 64
-  --use_ema
-  --ema_update_interval 1
-  --ema_decay 0.99
-  --ema_use_in_checkpoint
 )
 
-torchrun --nnodes=2 --nproc_per_node=8 --node_rank="${INDEX}" --master_addr="${CHIEF_IP}" --master_port=8081 \
-  fastvideo/train_wan_2_1_pref_grpo.py \
+torchrun --nnodes=4 --nproc_per_node=8 --node_rank="${INDEX}" --master_addr="${CHIEF_IP}" --master_port=8081 \
+  fastvideo/train_wan_2_1.py \
   "${TRAIN_ARGS[@]}"

@@ -1,4 +1,5 @@
 import argparse
+import json
 import torch
 from accelerate.logging import get_logger
 import os
@@ -8,6 +9,8 @@ from torch.utils.data.distributed import DistributedSampler
 from tqdm import tqdm
 from diffusers import AutoencoderKLWan, WanPipeline
 from diffusers.utils import export_to_video
+from diffusers.utils import convert_unet_state_dict_to_peft
+from peft import LoraConfig, set_peft_model_state_dict
 
 logger = get_logger(__name__)
 
@@ -76,6 +79,51 @@ def main(args):
     pipe = WanPipeline.from_pretrained(model_id, vae=vae, torch_dtype=torch.bfloat16)
     
     pipe.to(device)
+    if args.lora_dir:
+        if not os.path.isdir(args.lora_dir):
+            raise ValueError(f"LORA_DIR not found: {args.lora_dir}")
+        lora_config_path = os.path.join(args.lora_dir, "lora_config.json")
+        if os.path.exists(lora_config_path):
+            with open(lora_config_path, "r") as f:
+                lora_cfg = json.load(f)
+        else:
+            lora_cfg = None
+        if lora_cfg is not None and isinstance(lora_cfg, dict):
+            lora_rank = lora_cfg["lora_params"]["lora_rank"]
+            lora_alpha = lora_cfg["lora_params"]["lora_alpha"]
+            target_modules = lora_cfg["lora_params"]["target_modules"]
+        else:
+            lora_rank = 128
+            lora_alpha = 256
+            target_modules = [
+                "add_k_proj",
+                "add_q_proj",
+                "add_v_proj",
+                "to_add_out",
+                "to_k",
+                "to_out.0",
+                "to_q",
+                "to_v",
+            ]
+        lora_config = LoraConfig(
+            r=lora_rank,
+            lora_alpha=lora_alpha,
+            init_lora_weights=False,
+            target_modules=target_modules,
+        )
+        pipe.transformer.add_adapter(lora_config)
+        lora_state_dict = pipe.lora_state_dict(args.lora_dir)
+        transformer_state_dict = {
+            k.replace("transformer.", ""): v
+            for k, v in lora_state_dict.items()
+            if k.startswith("transformer.")
+        }
+        transformer_state_dict = convert_unet_state_dict_to_peft(transformer_state_dict)
+        set_peft_model_state_dict(
+            pipe.transformer, transformer_state_dict, adapter_name="default"
+        )
+        pipe.transformer.set_adapter("default")
+        print(f"Loaded LoRA checkpoint from {args.lora_dir}")
 
     negative_prompt = "Bright tones, overexposed, static, blurred details, subtitles, style, works, paintings, images, static, overall gray, worst quality, low quality, JPEG compression residue, ugly, incomplete, extra fingers, poorly drawn hands, poorly drawn faces, deformed, disfigured, misshapen limbs, fused fingers, still picture, messy background, three legs, many people in the background, walking backwards"
 
@@ -150,6 +198,12 @@ if __name__ == "__main__":
         type=str,
         default="Wan-AI/Wan2.1-T2V-1.3B-Diffusers",
         help="The path or name of the Wan2.1 Diffusers model.",
+    )
+    parser.add_argument(
+        "--lora_dir",
+        type=str,
+        default=None,
+        help="Optional LoRA checkpoint directory.",
     )
     parser.add_argument(
         "--prompt_dir", 

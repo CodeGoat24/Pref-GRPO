@@ -6,7 +6,6 @@ import functools
 from functools import partial
 
 import torch
-from peft.utils.other import fsdp_auto_wrap_policy
 from torch.distributed.algorithms._checkpoint.checkpoint_wrapper import (
     CheckpointImpl, apply_activation_checkpointing, checkpoint_wrapper)
 from torch.distributed.fsdp import MixedPrecision, ShardingStrategy
@@ -74,13 +73,10 @@ def get_dit_fsdp_kwargs(
     master_weight_type="fp32",
 ):
     no_split_modules = get_no_split_modules(transformer)
-    if use_lora:
-        auto_wrap_policy = fsdp_auto_wrap_policy
-    else:
-        auto_wrap_policy = functools.partial(
-            transformer_auto_wrap_policy,
-            transformer_layer_cls=no_split_modules,
-        )
+    auto_wrap_policy = functools.partial(
+        transformer_auto_wrap_policy,
+        transformer_layer_cls=no_split_modules,
+    )
 
     # we use float32 for fsdp but autocast during training
     mixed_precision = get_mixed_precision(master_weight_type)
@@ -107,11 +103,10 @@ def get_dit_fsdp_kwargs(
         "cpu_offload": cpu_offload,
     }
 
-    # Add LoRA-specific settings when LoRA is enabled
+    # Align LoRA wrapping behavior with the qwenimage strategy.
     if use_lora:
         fsdp_kwargs.update({
-            "use_orig_params": False,  # Required for LoRA memory savings
-            "sync_module_states": True,
+            "use_orig_params": True,
         })
 
     return fsdp_kwargs, no_split_modules

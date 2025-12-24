@@ -2,6 +2,7 @@ GPU_NUM=8
 
 MODEL_PATH=Wan-AI/Wan2.1-T2V-1.3B-Diffusers
 OUTPUT_DIR='wan_output'
+LORA_DIR=
 
 mkdir -p ${OUTPUT_DIR}
 
@@ -11,4 +12,5 @@ torchrun --nproc_per_node=$GPU_NUM --master_port 19000 \
     --prompt_dir "data/video_prompts.txt" \
     --model_path ${MODEL_PATH} \
     --batch_size 1 \
-    --dataloader_num_workers 8
+    --dataloader_num_workers 8 \
+    ${LORA_DIR:+--lora_dir "$LORA_DIR"}

@@ -30,7 +30,7 @@ COMMON_TRAIN_ARGS=(
   --grpo_step_mode flow
   --rationorm
   --eval_every_steps 10
-  --eval_num_prompts 8
+  --eval_num_prompts 32
   # --use_ema
   # --ema_update_interval 1
   # --ema_decay 0.99

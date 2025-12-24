@@ -26,11 +26,10 @@ TRAIN_ARGS=(
   --sampling_steps 25
   --eta 0.7
   --num_generations 8
-  --use_unifiedreward_think
-  --use_clip
+  --reward_spec '{"unifiedreward_think": 0.4, "clip": 0.6}'
   --api_url "${API_URL}"
 )
 
 torchrun --nnodes=8 --nproc_per_node=8 --node_rank="${INDEX}" --master_addr="${CHIEF_IP}" --master_port=8081 \
-  fastvideo/train_flux_pref_grpo.py \
+  fastvideo/train_flux.py \
   "${TRAIN_ARGS[@]}"

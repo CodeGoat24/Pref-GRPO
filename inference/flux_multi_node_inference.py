@@ -12,12 +12,15 @@ from tqdm import tqdm
 import matplotlib.pyplot as plt
 from PIL import Image
 from diffusers import FluxPipeline
+from diffusers.utils import convert_unet_state_dict_to_peft
 from transformers import (
     CLIPTextModel, CLIPTokenizer,
     T5EncoderModel, T5TokenizerFast,
     CLIPVisionModelWithProjection,
 )
 import pandas as pd
+from peft import LoraConfig, set_peft_model_state_dict
+import json
 from diffusers.models import AutoencoderKL, FluxTransformer2DModel
 from diffusers.schedulers import FlowMatchEulerDiscreteScheduler
 
@@ -90,6 +93,56 @@ def main(args):
     )
     pipe.to(device)
     pipe.set_progress_bar_config(disable=False)
+    if args.lora_dir:
+        if not os.path.isdir(args.lora_dir):
+            raise ValueError(f"LORA_DIR not found: {args.lora_dir}")
+        lora_config_path = os.path.join(args.lora_dir, "lora_config.json")
+        if os.path.exists(lora_config_path):
+            with open(lora_config_path, "r") as f:
+                lora_cfg = json.load(f)
+        else:
+            lora_cfg = None
+        if lora_cfg is not None and isinstance(lora_cfg, dict):
+            lora_rank = lora_cfg["lora_params"]["lora_rank"]
+            lora_alpha = lora_cfg["lora_params"]["lora_alpha"]
+            target_modules = lora_cfg["lora_params"]["target_modules"]
+        else:
+            target_modules = [
+                "attn.to_k",
+                "attn.to_q",
+                "attn.to_v",
+                "attn.to_out.0",
+                "attn.add_k_proj",
+                "attn.add_q_proj",
+                "attn.add_v_proj",
+                "attn.to_add_out",
+                "ff.net.0.proj",
+                "ff.net.2",
+                "ff_context.net.0.proj",
+                "ff_context.net.2",
+            ]
+            lora_rank = 16
+            lora_alpha = 16
+        lora_config = LoraConfig(
+            r=lora_rank,
+            lora_alpha=lora_alpha,
+            init_lora_weights=False,
+            target_modules=target_modules,
+        )
+        pipe.transformer.add_adapter(lora_config)
+        lora_state_dict = pipe.lora_state_dict(args.lora_dir)
+        transformer_state_dict = {
+            k.replace("transformer.", ""): v
+            for k, v in lora_state_dict.items()
+            if k.startswith("transformer.")
+        }
+        transformer_state_dict = convert_unet_state_dict_to_peft(transformer_state_dict)
+        set_peft_model_state_dict(
+            pipe.transformer, transformer_state_dict, adapter_name="default"
+        )
+        if hasattr(pipe.transformer, "set_adapter"):
+            pipe.transformer.set_adapter("default")
+        print(f"Loaded LoRA checkpoint from {args.lora_dir}")
 
     for _, data in tqdm(enumerate(dataloader), disable=local_rank != 0):
         try:
@@ -142,6 +195,12 @@ if __name__ == "__main__":
         "--model_path",
         type=str,
         default=None,
+    )
+    parser.add_argument(
+        "--lora_dir",
+        type=str,
+        default=None,
+        help="Optional LoRA checkpoint directory.",
     )
 
     parser.add_argument("--prompt_dir", type=str, default="data/prompt_en.csv")

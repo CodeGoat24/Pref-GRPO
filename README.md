@@ -118,10 +118,10 @@ bash scripts/full_train/finetune_unifiedreward_flux.sh
 
 # Qwen-Image
 ## UnifiedReward-Think for Pref-GRPO
-bash scripts/full_train/finetune_prefgrpo_qwenimage_grpo.sh
+bash scripts/full_train/finetune_prefgrpo_qwenimage.sh
 
 ## UnifiedReward for Point Score-based GRPO
-bash scripts/full_train/finetune_unifiedreward_qwenimage_grpo.sh
+bash scripts/full_train/finetune_unifiedreward_qwenimage.sh
 
 # Wan2.1
 ## Pref-GRPO

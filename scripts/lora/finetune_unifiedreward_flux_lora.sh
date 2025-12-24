@@ -27,13 +27,12 @@ TRAIN_ARGS=(
   --sampling_steps 25
   --eta 0.7
   --num_generations 16
-  --use_unifiedreward
+  --reward_spec '{"unifiedreward_alignment": 1.4, "unifiedreward_style": 0.7}'
   --api_url "${API_URL}"
   --lora_alpha 128
   --lora_rank 64
-  # --resume_from_lora_checkpoint /path/to/lora/dir
 )
 
 torchrun --nnodes=8 --nproc_per_node=8 --node_rank="${INDEX}" --master_addr="${CHIEF_IP}" --master_port=8081 \
-  fastvideo/train_flux_unifiedreward.py \
+  fastvideo/train_flux.py \
   "${TRAIN_ARGS[@]}"

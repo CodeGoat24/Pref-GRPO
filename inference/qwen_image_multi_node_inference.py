@@ -12,6 +12,10 @@ from tqdm import tqdm
 import matplotlib.pyplot as plt
 from PIL import Image
 import pandas as pd
+import json
+from diffusers.utils import convert_unet_state_dict_to_peft
+from peft import LoraConfig, set_peft_model_state_dict
+from safetensors.torch import load_file
 
 class UniGenBenchDataset(Dataset):
     def __init__(
@@ -68,6 +72,62 @@ def main(args):
 
     pipe = DiffusionPipeline.from_pretrained(args.model_path, torch_dtype=torch_dtype)
     pipe = pipe.to(device)
+    if args.lora_dir:
+        if not os.path.isdir(args.lora_dir):
+            raise ValueError(f"LORA_DIR not found: {args.lora_dir}")
+        lora_config_path = os.path.join(args.lora_dir, "lora_config.json")
+        if os.path.exists(lora_config_path):
+            with open(lora_config_path, "r") as f:
+                lora_cfg = json.load(f)
+        else:
+            lora_cfg = None
+        if lora_cfg is None or not isinstance(lora_cfg, dict):
+            raise ValueError(f"Missing lora_config.json in {args.lora_dir}")
+        lora_rank = lora_cfg["lora_params"]["lora_rank"]
+        lora_alpha = lora_cfg["lora_params"]["lora_alpha"]
+        target_modules = lora_cfg["lora_params"]["target_modules"]
+        lora_config = LoraConfig(
+            r=lora_rank,
+            lora_alpha=lora_alpha,
+            init_lora_weights=False,
+            target_modules=target_modules,
+        )
+        transformer = getattr(pipe, "transformer", None)
+        if transformer is None:
+            raise ValueError("Pipeline has no transformer; cannot load LoRA.")
+        if hasattr(transformer, "add_adapter"):
+            transformer.add_adapter(lora_config)
+        else:
+            from peft import get_peft_model
+
+            transformer = get_peft_model(transformer, lora_config)
+            pipe.transformer = transformer
+        candidate_files = [
+            "adapter_model.safetensors",
+            "pytorch_lora_weights.safetensors",
+            "lora.safetensors",
+        ]
+        weight_path = None
+        for fname in candidate_files:
+            path = os.path.join(args.lora_dir, fname)
+            if os.path.exists(path):
+                weight_path = path
+                break
+        if weight_path is None:
+            raise ValueError(f"No LoRA weights found in {args.lora_dir}")
+        lora_state_dict = load_file(weight_path)
+        if any(k.startswith("transformer.") for k in lora_state_dict.keys()):
+            lora_state_dict = {
+                k.replace("transformer.", ""): v for k, v in lora_state_dict.items()
+            }
+        if not any(k.startswith("lora") for k in lora_state_dict.keys()):
+            lora_state_dict = convert_unet_state_dict_to_peft(lora_state_dict)
+        set_peft_model_state_dict(
+            transformer, lora_state_dict, adapter_name="default"
+        )
+        if hasattr(transformer, "set_adapter"):
+            transformer.set_adapter("default")
+        print(f"Loaded LoRA checkpoint from {args.lora_dir}")
 
     positive_magic = {
         "en": ", Ultra HD, 4K, cinematic composition.", # for english prompt
@@ -138,6 +198,12 @@ if __name__ == "__main__":
         "--model_path",
         type=str,
         default=None,
+    )
+    parser.add_argument(
+        "--lora_dir",
+        type=str,
+        default=None,
+        help="Optional LoRA checkpoint directory.",
     )
 
     parser.add_argument("--prompt_dir", type=str, default="data/prompt_en.csv")
