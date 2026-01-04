@@ -1,5 +1,5 @@
 
-vllm serve CodeGoat24/UnifiedReward-qwen-7b \
+vllm serve CodeGoat24/UnifiedReward-2.0-qwen3vl-8b \
     --host localhost \
     --trust-remote-code \
     --served-model-name UnifiedReward \

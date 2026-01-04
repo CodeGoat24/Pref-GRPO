@@ -133,20 +133,16 @@ def get_unifiedreward_think_image_template() -> str:
 
 def get_unifiedreward_image_template() -> str:
     return (
-        "You are presented with a generated image and its associated text caption. Your task is to analyze the image across multiple dimensions in relation to the caption. Specifically:\n\n"
-        "1. Evaluate each word in the caption based on how well it is visually represented in the image. Assign a numerical score to each word using the format:\n"
-        "   Word-wise Scores: [[\"word1\", score1], [\"word2\", score2], ..., [\"wordN\", scoreN], [\"[No_mistakes]\", scoreM]]\n"
-        "   - A higher score indicates that the word is less well represented in the image.\n"
-        "   - The special token [No_mistakes] represents whether all elements in the caption were correctly depicted. A high score suggests no mistakes; a low score suggests missing or incorrect elements.\n\n"
-        "2. Provide overall assessments for the image along the following axes (each rated from 1 to 5):\n"
-        "- Alignment Score: How well the image matches the caption in terms of content.\n"
-        "- Coherence Score: How logically consistent the image is (absence of visual glitches, object distortions, etc.).\n"
-        "- Style Score: How aesthetically appealing the image looks, regardless of caption accuracy.\n\n"
-        "Output your evaluation using the format below:\n\n"
-        "---\n\n"
-        "Word-wise Scores: [[\"word1\", score1], ..., [\"[No_mistakes]\", scoreM]]\n\n"
-        "Alignment Score (1-5): X\n"
-        "Coherence Score (1-5): Y\n"
-        "Style Score (1-5): Z\n\n"
-        "Your task is provided as follows:\nText Caption: [{prompt}]"
-    )
+      "You are presented with a generated image and its associated text caption. "
+      "Your task is to analyze the image across multiple dimensions in relation to the caption. Specifically:\n"
+      "Provide overall assessments for the image along the following axes (each rated from 1 to 5):\n"
+      "- Alignment Score: How well the image matches the caption in terms of content.\n"
+      "- Coherence Score: How logically consistent the image is (absence of visual glitches, object distortions, etc.).\n"
+      "- Style Score: How aesthetically appealing the image looks, regardless of caption accuracy.\n\n"
+      "Output your evaluation using the format below:\n\n"
+      "Alignment Score (1-5): X\n"
+      "Coherence Score (1-5): Y\n"
+      "Style Score (1-5): Z\n\n"
+      "Your task is provided as follows:\n"
+      "Text Caption: [{prompt}]"
+  )
