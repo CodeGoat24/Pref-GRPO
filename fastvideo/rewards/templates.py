@@ -1,3 +1,5 @@
+
+
 def get_unifiedreward_think_video_template() -> str:
     return '''You are an objective and precise evaluator for video quality comparison. I will provide you with a text caption and a sequence of consecutive frames extracted from two generated videos based on this caption. The first half of the frames belong to Video 1, and the second half of the frames belong to Video 2. You must analyze these two videos carefully and determine which video is better.
 
@@ -131,18 +133,129 @@ def get_unifiedreward_think_image_template() -> str:
         '''
 
 
+
+
 def get_unifiedreward_image_template() -> str:
     return (
-      "You are presented with a generated image and its associated text caption. "
-      "Your task is to analyze the image across multiple dimensions in relation to the caption. Specifically:\n"
-      "Provide overall assessments for the image along the following axes (each rated from 1 to 5):\n"
-      "- Alignment Score: How well the image matches the caption in terms of content.\n"
-      "- Coherence Score: How logically consistent the image is (absence of visual glitches, object distortions, etc.).\n"
-      "- Style Score: How aesthetically appealing the image looks, regardless of caption accuracy.\n\n"
-      "Output your evaluation using the format below:\n\n"
-      "Alignment Score (1-5): X\n"
-      "Coherence Score (1-5): Y\n"
-      "Style Score (1-5): Z\n\n"
-      "Your task is provided as follows:\n"
-      "Text Caption: [{prompt}]"
-  )
+        "You are presented with a generated image and its associated text caption. Your task is to analyze the image across multiple dimensions in relation to the caption. Specifically:\n\n"
+        "1. Evaluate each word in the caption based on how well it is visually represented in the image. Assign a numerical score to each word using the format:\n"
+        "   Word-wise Scores: [[\"word1\", score1], [\"word2\", score2], ..., [\"wordN\", scoreN], [\"[No_mistakes]\", scoreM]]\n"
+        "   - A higher score indicates that the word is less well represented in the image.\n"
+        "   - The special token [No_mistakes] represents whether all elements in the caption were correctly depicted. A high score suggests no mistakes; a low score suggests missing or incorrect elements.\n\n"
+        "2. Provide overall assessments for the image along the following axes (each rated from 1 to 5):\n"
+        "- Alignment Score: How well the image matches the caption in terms of content.\n"
+        "- Coherence Score: How logically consistent the image is (absence of visual glitches, object distortions, etc.).\n"
+        "- Style Score: How aesthetically appealing the image looks, regardless of caption accuracy.\n\n"
+        "Output your evaluation using the format below:\n\n"
+        "---\n\n"
+        "Word-wise Scores: [[\"word1\", score1], ..., [\"[No_mistakes]\", scoreM]]\n\n"
+        "Alignment Score (1-5): X\n"
+        "Coherence Score (1-5): Y\n"
+        "Style Score (1-5): Z\n\n"
+        "Your task is provided as follows:\nText Caption: [{prompt}]"
+    )
+
+
+def get_unifiedreward_flex_image_template() -> str:
+    return """## Identity
+You are a top-tier AI Image Content Evaluation Expert. Your task is to perform a hierarchical, multi-dimensional comparative analysis of Image 1 and Image 2 based on the provided Prompt.
+
+## Evaluation Framework
+
+### 1. Mandatory Starting Categories
+For every evaluation, you MUST address these three core areas, but you should **independently define 3-5 sub-dimensions** for each based on what makes the images distinct:
+- **A. Semantic Alignment & Accuracy**: Evaluate how well the images capture the prompt's subjects, actions, and constraints.
+- **B. Image Quality & Realism**: Evaluate technical execution, physical logic, and visual clarity.
+- **C. Aesthetics & Artistry**: Evaluate artistic appeal, color harmony, and compositional mastery.
+*Note: If the prompt involves unique traits, you are encouraged to add a personalized Category D.*
+
+### 2. Scoring & Reasoning Rules
+- **Dynamic Dimensions**: Do not rely on a fixed list. Choose sub-dimensions that best highlight the differences between the two images.
+- **Sum-of-10 Constraint**: For every sub-dimension, the scores for Image 1 and Image 2 MUST total exactly 10 (e.g., 8+2, 5+5).
+- **Evidence-Based Reasoning**: Provide professional, critical analysis for each score. Avoid generic praise; point out specific visual evidence.
+
+## Input Data
+**Prompt:** [{prompt}]
+
+**Content to be Evaluated:**
+[Image 1] 
+[Image 2] 
+
+## Output Format
+Output the results as a single, complete JSON object.
+
+```json
+{{
+  "prompt": "[Original Prompt]",
+  "categories": [
+    {{
+      "name": "[Category Name]",
+      "dims": [
+        {{
+          "name": "[Custom Sub-dimension]",
+          "reason_1": "[Specific evidence]",
+          "reason_2": "[Specific evidence]",
+          "score_1": 0-10,
+          "score_2": 0-10,
+        }}
+      ] 
+      "cat_reason": "[Category-level analysis]",
+      "cat_winner": "Image 1/2",
+    }}
+  ]
+  "reason": "[Overall analysis]",
+  "winner": "Image 1/2"
+}}
+"""
+
+def get_unifiedreward_flex_video_template() -> str:
+    return """## Identity
+You are a top-tier AI Video Evaluation Expert. Perform a hierarchical, multi-dimensional comparative analysis of Video 1 and Video 2 based on the provided Prompt.
+
+## Evaluation Framework
+
+### 1. Mandatory Categories
+For each, independently define **3-5 specific sub-dimensions** based on the videos' actual content:
+- **A. Semantic Alignment & Accuracy**: Accuracy of subjects, attributes, spatial relationships, and environment as defined by the prompt.
+- **B. Video Quality & Dynamic Realism**: Technical fidelity, temporal stability (no flickering/warping), subject identity persistence, and physical plausibility of motion.
+- **C. Narrative, Aesthetics & Cinematography**: Composition, color harmony, camera movement quality (smoothness/intent), and narrative flow.
+*Note: If the prompt involves unique traits, you are encouraged to add a personalized Category D.*
+
+### 2. Core Rules
+- **Dynamic Selection**: Do NOT simply copy a fixed list. Choose sub-dimensions that most effectively differentiate the two videos.
+- **Sum-of-10 Scoring**: For every sub-dimension, the total score (Video 1 + Video 2) MUST strictly equal 10 points (e.g., 6+4, 5+5).
+- **Evidence-Based Reasoning**: Provide professional, critical analysis pointing to specific visual/temporal evidence.
+
+## Input Data
+**Prompt:** [{prompt}]
+
+**Content to be Evaluated:**
+[Video 1] 
+[Video 2] 
+
+## Output Format
+Return a single, valid JSON object in English.
+
+```json
+{{
+  "prompt": "[Original Prompt]",
+  "categories": [
+    {{
+      "name": "[Category Name]",
+      "dims": [
+        {{
+          "name": "[Custom Sub-dimension]",
+          "reason_1": "[Specific evidence]",
+          "reason_2": "[Specific evidence]",
+          "score_1": 0-10,
+          "score_2": 0-10,
+        }}
+      ]
+      "cat_reason": "[Category-level analysis]",
+      "cat_winner": "Video 1/2",
+    }}
+  ]
+  "reason": "[Overall analysis]",
+  "winner": "Video 1/2"
+}}
+"""

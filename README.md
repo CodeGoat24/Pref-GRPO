@@ -66,7 +66,6 @@ cd open_clip
 pip install -e .
 cd ..
 
-mkdir images
 ```
 
 3. Download Models
@@ -76,6 +75,8 @@ huggingface-cli download CodeGoat24/UnifiedReward-Think-qwen-7b
 
 wget https://huggingface.co/apple/DFN5B-CLIP-ViT-H-14-378/resolve/main/open_clip_pytorch_model.bin
 ```
+
+
 ## 💻 Training
 
 #### 1. Deploy vLLM server
@@ -118,15 +119,49 @@ bash scripts/full_train/finetune_unifiedreward_flux.sh
 
 # Qwen-Image
 ## UnifiedReward-Think for Pref-GRPO
-bash scripts/full_train/finetune_prefgrpo_qwenimage.sh
+bash scripts/full_train/finetune_prefgrpo_qwenimage_grpo.sh
 
 ## UnifiedReward for Point Score-based GRPO
-bash scripts/full_train/finetune_unifiedreward_qwenimage.sh
+bash scripts/full_train/finetune_unifiedreward_qwenimage_grpo.sh
 
 # Wan2.1
 ## Pref-GRPO
 bash scripts/full_train/finetune_prefgrpo_wan_2_1.sh
 ```
+
+
+### 🧩 Reward Models & Usage
+We support multiple reward models via the dispatcher in `fastvideo/rewards/dispatcher.py`.
+Reward model checkpoint paths are configured in `fastvideo/rewards/reward_paths.py`.
+
+Supported reward models:
+- `aesthetic`
+- `clip`
+- `hpsv2`
+- `hpsv3`
+- `pickscore`
+- `unifiedreward_think`
+- `unifiedreward_alignment`
+- `unifiedreward_style`
+- `unifiedreward_coherence`
+- `videoalign`
+
+#### Set rewards in your training/eval scripts
+Use `--reward_spec` to choose which rewards to compute and (optionally) their weights.
+
+Examples:
+```bash
+# Use a list of rewards (all weights = 1.0)
+--reward_spec "unifiedreward_think,clip,,hpsv3"
+
+# Weighted mix
+--reward_spec "unifiedreward_alignment:0.5,unifiedreward_style:1.0,unifiedreward_coherence:0.5"
+
+# JSON formats are also supported
+--reward_spec '{"clip":0.5,"aesthetic":1.0,"hpsv2":0.5}'
+--reward_spec '["clip","aesthetic","hpsv2"]'
+```
+
 
 ### 🚀 Inference and Evaluation
 we use test prompts in [UniGenBench](https://github.com/CodeGoat24/UniGenBench), as shown in ```"./data/unigenbench_test_data.csv"```.
@@ -142,6 +177,20 @@ bash inference/wan_dist_infer.sh
 ```
 
 Then, evaluate the outputs following [UniGenBench](https://github.com/CodeGoat24/UniGenBench).
+
+### 📊 Reward-based Image Scoring (UniGenBench)
+We provide a script to score a folder of generated images on UniGenBench using supported reward models.
+
+```bash
+GPU_NUM=8 bash tools/eval_quality.sh
+```
+
+Edit `tools/eval_quality.sh` to set:
+- `--image_dir`: path to your UniGenBench generated images
+- `--prompt_csv`: prompt file (default: `data/unigenbench_test_data.csv`)
+- `--reward_spec`: the reward models (and weights) to use
+- `--api_url`: UnifiedReward server endpoint (if using UnifiedReward-based rewards)
+- `--output_json`: output file for scores
 
 
 ## 📧 Contact
