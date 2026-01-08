@@ -71,7 +71,7 @@ cd ..
 3. Download Models
 ```bash
 huggingface-cli download CodeGoat24/UnifiedReward-2.0-qwen3vl-8b
-huggingface-cli download CodeGoat24/UnifiedReward-Think-qwen-7b
+huggingface-cli download CodeGoat24/UnifiedReward-Think-qwen3vl-8b
 
 wget https://huggingface.co/apple/DFN5B-CLIP-ViT-H-14-378/resolve/main/open_clip_pytorch_model.bin
 ```
