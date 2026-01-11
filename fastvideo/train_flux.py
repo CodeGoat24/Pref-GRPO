@@ -935,7 +935,7 @@ def main(args):
     
     fsdp_kwargs, no_split_modules = get_dit_fsdp_kwargs(
         transformer,
-        args.fsdp_sharding_startegy,
+        args.fsdp_sharding_strategy,
         getattr(args, "use_lora", False),
         args.use_cpu_offload,
         args.master_weight_type,
@@ -956,14 +956,19 @@ def main(args):
             transformer, no_split_modules, args.selective_checkpointing
         )
 
+    vae_model_path = (
+        args.vae_model_path
+        if getattr(args, "vae_model_path", None)
+        else args.pretrained_model_name_or_path
+    )
     vae = AutoencoderKL.from_pretrained(
-        args.pretrained_model_name_or_path,
+        vae_model_path,
         subfolder="vae",
         torch_dtype = torch.bfloat16,
     ).to(device)
 
     main_print(
-        f"--> Initializing FSDP with sharding strategy: {args.fsdp_sharding_startegy}"
+        f"--> Initializing FSDP with sharding strategy: {args.fsdp_sharding_strategy}"
     )
     # Load the reference model
     ref_transformer = None
@@ -1258,6 +1263,38 @@ def main(args):
 
 
 
+    if args.output_dir is not None:
+        final_step = args.num_train_epochs * step_per_epoch
+        ema_applied = False
+        if (
+            ema is not None
+            and getattr(args, "ema_use_in_checkpoint", True)
+            and final_step >= args.ema_start_step
+        ):
+            ema.copy_to(params_to_optimize, store_temp=True)
+            ema_applied = True
+        if getattr(args, "use_lora", False):
+            save_lora_checkpoint(
+                transformer,
+                optimizer,
+                rank,
+                args.output_dir,
+                final_step,
+                pipe,
+                args.num_train_epochs - 1,
+            )
+        else:
+            save_checkpoint(
+                transformer,
+                rank,
+                args.output_dir,
+                final_step,
+                args.num_train_epochs - 1,
+            )
+        if ema_applied:
+            ema.restore(params_to_optimize)
+        dist.barrier()
+
     if get_sequence_parallel_state():
         destroy_sequence_parallel_group()
 
@@ -1480,7 +1517,7 @@ def build_parser():
         help="Batch size for sequence parallel training",
     )
 
-    parser.add_argument("--fsdp_sharding_startegy", default="full")
+    parser.add_argument("--fsdp_sharding_strategy", default="full")
 
     # lr_scheduler
     parser.add_argument(

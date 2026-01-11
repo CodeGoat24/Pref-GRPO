@@ -163,6 +163,31 @@ def save_qwenimage_lora_checkpoint(transformer, optimizer, rank, output_dir, ste
     main_print(f"--> LoRA checkpoint saved at {save_dir}")
 
 
+def save_qwenimage_checkpoint(args, transformer, optimizer, rank, step, epoch, ema_handler):
+    use_ema_for_ckpt = (
+        args.use_ema
+        and ema_handler is not None
+        and getattr(args, "ema_use_in_checkpoint", True)
+        and step >= args.ema_start_step
+    )
+    if getattr(args, "use_lora", False):
+        if use_ema_for_ckpt:
+            with ema_handler.use_ema_weights(transformer):
+                save_qwenimage_lora_checkpoint(
+                    transformer, optimizer, rank, args.output_dir, step, epoch
+                )
+        else:
+            save_qwenimage_lora_checkpoint(
+                transformer, optimizer, rank, args.output_dir, step, epoch
+            )
+    else:
+        if use_ema_for_ckpt:
+            with ema_handler.use_ema_weights(transformer):
+                save_checkpoint(transformer, rank, args.output_dir, step, epoch)
+        else:
+            save_checkpoint(transformer, rank, args.output_dir, step, epoch)
+
+
 def load_eval_prompts(dataset, num_prompts, seed):
     if num_prompts <= 0:
         return []
@@ -1045,14 +1070,19 @@ def main(args):
         )
 
     from diffusers.models.autoencoders import AutoencoderKLQwenImage
+    vae_model_path = (
+        args.vae_model_path
+        if getattr(args, "vae_model_path", None)
+        else args.pretrained_model_name_or_path
+    )
     vae = AutoencoderKLQwenImage.from_pretrained(
-        args.pretrained_model_name_or_path,
+        vae_model_path,
         subfolder="vae",
         torch_dtype = torch.bfloat16,
     ).to(device)
 
     main_print(
-        f"--> Initializing FSDP with sharding strategy: {args.fsdp_sharding_startegy}"
+        f"--> Initializing FSDP with sharding strategy: {args.fsdp_sharding_strategy}"
     )
     # Load the reference model (optional, for KL regularization)
     ref_transformer = None
@@ -1219,81 +1249,32 @@ def main(args):
             sampler.set_epoch(epoch) # Crucial for distributed shuffling per epoch
         
         if epoch > 0:
-            use_ema_for_ckpt = (
-                args.use_ema
-                and ema_handler is not None
-                and getattr(args, "ema_use_in_checkpoint", True)
-                and epoch * step_per_epoch >= args.ema_start_step
+            save_qwenimage_checkpoint(
+                args,
+                transformer,
+                optimizer,
+                rank,
+                epoch * step_per_epoch,
+                epoch - 1,
+                ema_handler,
             )
-            if getattr(args, "use_lora", False):
-                if use_ema_for_ckpt:
-                    with ema_handler.use_ema_weights(transformer):
-                        save_qwenimage_lora_checkpoint(
-                            transformer,
-                            optimizer,
-                            rank,
-                            args.output_dir,
-                            epoch * step_per_epoch,
-                            epoch - 1,
-                        )
-                else:
-                    save_qwenimage_lora_checkpoint(
-                        transformer,
-                        optimizer,
-                        rank,
-                        args.output_dir,
-                        epoch * step_per_epoch,
-                        epoch - 1,
-                    )
-            else:
-                if use_ema_for_ckpt:
-                    with ema_handler.use_ema_weights(transformer):
-                        save_checkpoint(
-                            transformer,
-                            rank,
-                            args.output_dir,
-                            epoch * step_per_epoch,
-                            epoch - 1,
-                        )
-                else:
-                    save_checkpoint(
-                        transformer,
-                        rank,
-                        args.output_dir,
-                        epoch * step_per_epoch,
-                        epoch - 1,
-                    )
             dist.barrier()
 
         for step, (prompt_embeds, prompt_attention_masks, caption, original_length) in enumerate(train_dataloader):
             prompt_embeds = prompt_embeds.to(device)
             prompt_attention_masks = prompt_attention_masks.to(device)
             start_time = time.time()
-            if (step-1) % args.checkpointing_steps == 0 and step!=1:
-                use_ema_for_ckpt = (
-                    args.use_ema
-                    and ema_handler is not None
-                    and getattr(args, "ema_use_in_checkpoint", True)
-                    and step >= args.ema_start_step
+            global_step = epoch * step_per_epoch + step + 1
+            if global_step % args.checkpointing_steps == 0:
+                save_qwenimage_checkpoint(
+                    args,
+                    transformer,
+                    optimizer,
+                    rank,
+                    global_step,
+                    epoch,
+                    ema_handler,
                 )
-                if getattr(args, "use_lora", False):
-                    if use_ema_for_ckpt:
-                        with ema_handler.use_ema_weights(transformer):
-                            save_qwenimage_lora_checkpoint(
-                                transformer, optimizer, rank, args.output_dir, step, epoch
-                            )
-                    else:
-                        save_qwenimage_lora_checkpoint(
-                            transformer, optimizer, rank, args.output_dir, step, epoch
-                        )
-                else:
-                    if use_ema_for_ckpt:
-                        with ema_handler.use_ema_weights(transformer):
-                            save_checkpoint(
-                                transformer, rank, args.output_dir, step, epoch
-                            )
-                    else:
-                        save_checkpoint(transformer, rank, args.output_dir, step, epoch)
                 dist.barrier()
 
             loss, grad_norm, dim_reward, mean_kl_loss = train_one_step(
@@ -1382,6 +1363,19 @@ def main(args):
                 )
 
 
+
+    if args.output_dir is not None:
+        final_step = args.num_train_epochs * step_per_epoch
+        save_qwenimage_checkpoint(
+            args,
+            transformer,
+            optimizer,
+            rank,
+            final_step,
+            args.num_train_epochs - 1,
+            ema_handler,
+        )
+        dist.barrier()
 
     if get_sequence_parallel_state():
         destroy_sequence_parallel_group()
@@ -1567,7 +1561,7 @@ def build_parser():
         help="Batch size for sequence parallel training",
     )
 
-    parser.add_argument("--fsdp_sharding_startegy", default="full")
+    parser.add_argument("--fsdp_sharding_strategy", default="full")
 
     # lr_scheduler
     parser.add_argument(

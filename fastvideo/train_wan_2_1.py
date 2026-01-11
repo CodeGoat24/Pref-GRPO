@@ -95,6 +95,39 @@ def save_wan_lora_checkpoint(transformer, optimizer, pipeline, output_dir, step,
     main_print(f"--> LoRA checkpoint saved at step {step}")
 
 
+def save_wan_checkpoint(
+    args, transformer, optimizer, pipe, rank, step, epoch, ema, params_to_optimize
+):
+    ema_applied = False
+    if (
+        ema is not None
+        and getattr(args, "ema_use_in_checkpoint", True)
+        and step >= args.ema_start_step
+    ):
+        ema.copy_to(params_to_optimize, store_temp=True)
+        ema_applied = True
+    if getattr(args, "use_lora", False):
+        save_wan_lora_checkpoint(
+            transformer, optimizer, pipe, args.output_dir, step, epoch, rank
+        )
+    else:
+        cpu_state = transformer.state_dict()
+        if rank <= 0:
+            save_dir = os.path.join(args.output_dir, f"checkpoint-{step}-{epoch}")
+            os.makedirs(save_dir, exist_ok=True)
+            weight_path = os.path.join(save_dir, "diffusion_pytorch_model.safetensors")
+            save_file(cpu_state, weight_path)
+            config_dict = dict(transformer.config)
+            if "dtype" in config_dict:
+                del config_dict["dtype"]
+            config_path = os.path.join(save_dir, "config.json")
+            with open(config_path, "w") as f:
+                json.dump(config_dict, f, indent=4)
+        main_print(f"--> checkpoint saved at step {step}")
+    if ema_applied:
+        ema.restore(params_to_optimize)
+
+
 def load_wan_lora_weights(transformer, pipeline, checkpoint_dir):
     lora_state_dict = pipeline.lora_state_dict(checkpoint_dir)
     transformer_state_dict = {
@@ -1043,8 +1076,13 @@ def main(args):
         )
     
 
+    vae_model_path = (
+        args.vae_model_path
+        if getattr(args, "vae_model_path", None)
+        else args.pretrained_model_name_or_path
+    )
     vae = AutoencoderKLWan.from_pretrained(
-        args.pretrained_model_name_or_path,
+        vae_model_path,
         subfolder="vae",
         torch_dtype = torch.bfloat16,
     ).to(device)
@@ -1230,75 +1268,35 @@ def main(args):
             sampler.set_epoch(epoch) # Crucial for distributed shuffling per epoch       
         if epoch > 0:
             epoch_step = epoch * step_per_epoch
-            ema_applied = False
-            if (
-                ema is not None
-                and getattr(args, "ema_use_in_checkpoint", True)
-                and epoch_step >= args.ema_start_step
-            ):
-                ema.copy_to(params_to_optimize, store_temp=True)
-                ema_applied = True
-            if getattr(args, "use_lora", False):
-                save_wan_lora_checkpoint(
-                    transformer,
-                    optimizer,
-                    pipe,
-                    args.output_dir,
-                    epoch_step,
-                    epoch - 1,
-                    rank,
-                )
-            else:
-                cpu_state = transformer.state_dict()
-                if rank <= 0:
-                    save_dir = os.path.join(args.output_dir, f"checkpoint-{epoch_step}-{epoch-1}")
-                    os.makedirs(save_dir, exist_ok=True)
-                    weight_path = os.path.join(save_dir, "diffusion_pytorch_model.safetensors")
-                    save_file(cpu_state, weight_path)
-                    config_dict = dict(transformer.config)
-                    if "dtype" in config_dict:
-                        del config_dict["dtype"]
-                    config_path = os.path.join(save_dir, "config.json")
-                    with open(config_path, "w") as f:
-                        json.dump(config_dict, f, indent=4)
-                main_print(f"--> checkpoint saved at step {epoch_step}")
-            if ema_applied:
-                ema.restore(params_to_optimize)
+            save_wan_checkpoint(
+                args,
+                transformer,
+                optimizer,
+                pipe,
+                rank,
+                epoch_step,
+                epoch - 1,
+                ema,
+                params_to_optimize,
+            )
             dist.barrier()
         for step, (prompt_embeds, negative_prompt_embeds, caption) in enumerate(train_dataloader):
             prompt_embeds = prompt_embeds.to(device)
             negative_prompt_embeds = negative_prompt_embeds.to(device)
             start_time = time.time()
-            global_step = epoch * step_per_epoch + step
-            if (step-1) % args.checkpointing_steps == 0 and step!=1:
-                ema_applied = False
-                if (
-                    ema is not None
-                    and getattr(args, "ema_use_in_checkpoint", True)
-                    and global_step >= args.ema_start_step
-                ):
-                    ema.copy_to(params_to_optimize, store_temp=True)
-                    ema_applied = True
-                if getattr(args, "use_lora", False):
-                    save_wan_lora_checkpoint(
-                        transformer, optimizer, pipe, args.output_dir, step, epoch, rank
-                    )
-                else:
-                    cpu_state = transformer.state_dict()
-                    if rank <= 0:
-                        save_dir = os.path.join(args.output_dir, f"checkpoint-{step}-{epoch}")
-                        os.makedirs(save_dir, exist_ok=True)
-                        weight_path = os.path.join(save_dir, "diffusion_pytorch_model.safetensors")
-                        save_file(cpu_state, weight_path)
-                        config_dict = dict(transformer.config)
-                        if "dtype" in config_dict:
-                            del config_dict["dtype"]
-                        config_path = os.path.join(save_dir, "config.json")
-                        with open(config_path, "w") as f:
-                            json.dump(config_dict, f, indent=4)
-                    main_print(f"--> checkpoint saved at step {step}")
-                if ema_applied:
-                    ema.restore(params_to_optimize)
+            global_step = epoch * step_per_epoch + step + 1
+            if global_step % args.checkpointing_steps == 0:
+                save_wan_checkpoint(
+                    args,
+                    transformer,
+                    optimizer,
+                    pipe,
+                    rank,
+                    global_step,
+                    epoch,
+                    ema,
+                    params_to_optimize,
+                )
                 dist.barrier()
 
             loss, grad_norm, dim_reward, mean_kl_loss = train_one_step(
@@ -1387,6 +1385,21 @@ def main(args):
                 )
 
 
+
+    if args.output_dir is not None:
+        final_step = args.num_train_epochs * step_per_epoch
+        save_wan_checkpoint(
+            args,
+            transformer,
+            optimizer,
+            pipe,
+            rank,
+            final_step,
+            args.num_train_epochs - 1,
+            ema,
+            params_to_optimize,
+        )
+        dist.barrier()
 
     if get_sequence_parallel_state():
         destroy_sequence_parallel_group()
