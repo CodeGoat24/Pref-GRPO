@@ -28,6 +28,7 @@
 ## 🔥 News
 Please leave us a star ⭐ if you find this work helpful.
 
+- [2026/01] 🔥 **Tongyi Lab** improves Pref-GRPO on open-ended agents in [ArenaRL: Scaling RL for Open-Ended Agents via Tournamentbased Relative Ranking](https://arxiv.org/pdf/2601.06487). Thanks to all contributors!
 
 - [2025/11] 🔥🔥 We release **Qwen-Image**, **Wan2.1** and **FLUX.1-dev** Full/LoRA training code.
 
