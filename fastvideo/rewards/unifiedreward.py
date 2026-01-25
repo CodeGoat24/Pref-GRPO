@@ -9,15 +9,18 @@ def extract_normalized_rewards(
     sample_list: List[str],
     *,
     device: str | torch.device = "cuda",
-) -> Tuple[List[torch.Tensor], List[torch.Tensor], Dict[str, List[float]]]:
+) -> Tuple[
+    List[torch.Tensor],
+    List[torch.Tensor],
+    List[torch.Tensor],
+    Dict[str, List[float]],
+]:
     pattern = r"(\w+) Score \(1-5\):\s*([0-5](?:\.\d+)?)"
 
     all_scores = []
     for response in sample_list:
         matches = re.findall(pattern, response)
         scores = {key: float(value) for key, value in matches}
-        if "Coherence" in scores:
-            del scores["Coherence"]
         all_scores.append(scores)
 
     if not all_scores:
@@ -35,19 +38,27 @@ def extract_normalized_rewards(
 
     alignment_scores = []
     style_scores = []
+    coherence_scores = []
     log_alignment_scores = []
     log_style_scores = []
+    log_coherence_scores = []
 
     for score_dict in all_scores:
         alignment_score = score_dict.get("Alignment", dim_means.get("Alignment", 0.0))
         style_score = score_dict.get("Style", dim_means.get("Style", 0.0))
+        coherence_score = score_dict.get("Coherence", dim_means.get("Coherence", 0.0))
 
         alignment_scores.append(torch.tensor(alignment_score, device=device).unsqueeze(0))
         style_scores.append(torch.tensor(style_score, device=device).unsqueeze(0))
+        coherence_scores.append(torch.tensor(coherence_score, device=device).unsqueeze(0))
 
         log_alignment_scores.append(float(alignment_score))
         log_style_scores.append(float(style_score))
+        log_coherence_scores.append(float(coherence_score))
 
-    dim_array = {"Alignment": log_alignment_scores, "Style": log_style_scores}
-    return alignment_scores, style_scores, dim_array
-
+    dim_array = {
+        "Alignment": log_alignment_scores,
+        "Style": log_style_scores,
+        "Coherence": log_coherence_scores,
+    }
+    return alignment_scores, style_scores, coherence_scores, dim_array
