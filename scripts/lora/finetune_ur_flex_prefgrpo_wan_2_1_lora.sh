@@ -5,13 +5,18 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/../_common_finetune.sh"
 
-wandb_online ""
+wandb_offline ""
 
+export OVERALL_WEIGHT=0.3
+export DIM_WEIGHT=0.7
+export CATEGORY_WEIGHTS=1.0,0.7,0.3
 
-export EXP_NAME="pref_wan2_1_lora"
+export EXP_NAME="unifiedreward_flex_wan21_14b"
 
 API_URL="http://localhost:8080"
-OUTPUT_DIR="data/outputs/grpo"
+OUTPUT_DIR=outputs/$EXP_NAME
+
+
 
 TRAIN_ARGS=(
   "${COMMON_TRAIN_ARGS[@]}"
@@ -29,19 +34,28 @@ TRAIN_ARGS=(
   --t 33
   --sampling_steps 20
   --eta 0.7
-  --gradient_accumulation_steps 2
   --num_generations 6
+  --gradient_accumulation_steps 2
   --cfg_infer 5.0
-  --reward_spec '{"unifiedreward_think": 0.7, "clip": 0.3}'
   --api_url "${API_URL}"
-  --checkpointing_steps 20
-  --kl_beta 0.004
-  --lora_alpha 128
+  --checkpointing_steps 10
+  --timestep_fraction 0.8
   --lora_rank 64
+  --lora_alpha 128
+  --reward_spec '{"unifiedreward_flex": 0.7, "clip": 0.3}'
+  # KL
+  --kl_beta 0.004
+  --kl_adaptive
+  --kl_target 0.0025
+  --kl_horizon 80
+  --kl_ema_alpha 0.2
+  --kl_beta_min 0.004
+  --kl_beta_max 0.006
   --eval_every_steps 10
   --eval_num_prompts 64
 )
+export PYTHONPATH="$(pwd):${PYTHONPATH:-}"
 
-torchrun --nnodes=4 --nproc_per_node=8 --node_rank="${INDEX}" --master_addr="${CHIEF_IP}" --master_port=8081 \
+torchrun --nnodes=4 --nproc_per_node=8 --node_rank=${RANK} --master_addr=${MASTER_ADDR} --master_port=8081 \
   fastvideo/train_wan_2_1.py \
   "${TRAIN_ARGS[@]}"

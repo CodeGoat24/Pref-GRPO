@@ -196,13 +196,13 @@ Output the results as a single, complete JSON object.
           "reason_1": "[Specific evidence]",
           "reason_2": "[Specific evidence]",
           "score_1": 0-10,
-          "score_2": 0-10,
+          "score_2": 0-10
         }}
-      ] 
+      ],
       "cat_reason": "[Category-level analysis]",
-      "cat_winner": "Image 1/2",
+      "cat_winner": "Image 1/2"
     }}
-  ]
+  ],
   "reason": "[Overall analysis]",
   "winner": "Image 1/2"
 }}
@@ -248,13 +248,13 @@ Return a single, valid JSON object in English.
           "reason_1": "[Specific evidence]",
           "reason_2": "[Specific evidence]",
           "score_1": 0-10,
-          "score_2": 0-10,
+          "score_2": 0-10
         }}
-      ]
+      ],
       "cat_reason": "[Category-level analysis]",
-      "cat_winner": "Video 1/2",
+      "cat_winner": "Video 1/2"
     }}
-  ]
+  ],
   "reason": "[Overall analysis]",
   "winner": "Video 1/2"
 }}

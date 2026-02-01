@@ -808,6 +808,7 @@ def train_one_step(
         gather_tensor=gather_tensor,
         use_group=args.use_group,
         num_generations=args.num_generations,
+        apply_gdpo=getattr(args, "apply_gdpo", False),
     )
 
 
@@ -1643,6 +1644,12 @@ def build_parser():
         action="store_true",
         default=False,
         help="whether compute advantages for each prompt",
+    )
+    parser.add_argument(
+        "--apply_gdpo",
+        action="store_true",
+        default=False,
+        help="apply batch normalization to weighted advantages",
     )
     parser.add_argument(
         "--num_generations",

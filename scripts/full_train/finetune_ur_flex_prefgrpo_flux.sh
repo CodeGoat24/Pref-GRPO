@@ -1,0 +1,50 @@
+
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/../_common_finetune.sh"
+
+export EXP_NAME="unifiedreward_flex_flux"
+
+export VLLM_MAX_WORKERS=32
+export VLLM_LOG_STATS=0
+
+export OVERALL_WEIGHT=0.3
+export DIM_WEIGHT=0.7
+export CATEGORY_WEIGHTS=1.0,0.7,0.7
+
+
+wandb_offline ""
+API_URL="http://localhost:8080"
+OUTPUT_DIR="outputs/${EXP_NAME}"
+
+TRAIN_ARGS=(
+  "${COMMON_TRAIN_ARGS[@]}"
+  --pretrained_model_name_or_path black-forest-labs/FLUX.1-dev
+  --vae_model_path black-forest-labs/FLUX.1-dev
+  --data_json_path data/unigenbench_train_data/rl_embeddings/videos2caption.json
+  --exp_name "${EXP_NAME}"
+  --num_sample 100000
+  --train_batch_size 1
+  --dataloader_num_workers 1
+  --learning 3e-6
+  --output_dir "${OUTPUT_DIR}"
+  --t 1
+  --sampling_steps 15
+  --eta 0.7
+  --num_generations 9
+  --gradient_accumulation_steps 3
+  --api_url "${API_URL}"
+  --reward_spec '{"unifiedreward_flex": 0.7, "clip": 0.3}'
+  --timestep_fraction 0.6
+  --eval_every_steps 10
+  --eval_num_prompts 64
+)_rate
+
+
+export PYTHONPATH="$(pwd):${PYTHONPATH:-}"
+
+torchrun --nnodes=${WORLD_SIZE} --nproc_per_node=8 --node_rank=${RANK} --master_addr=${MASTER_ADDR} --master_port=8081 \
+  fastvideo/train_flux.py \
+  "${TRAIN_ARGS[@]}"

@@ -1,7 +1,7 @@
 <div align="center">
     <h1 align="center"> Pref-GRPO: Pairwise Preference Reward-based GRPO for Stable Text-to-Image Reinforcement Learning
     </h1>
-    
+
 [UnifiedReward](https://github.com/CodeGoat24/UnifiedReward) Team
 
 
@@ -73,8 +73,9 @@ cd ..
 ```bash
 huggingface-cli download CodeGoat24/UnifiedReward-2.0-qwen3vl-8b
 huggingface-cli download CodeGoat24/UnifiedReward-Think-qwen3vl-8b
+huggingface-cli download CodeGoat24/UnifiedReward-Flex-qwen3vl-8b
 
-wget https://huggingface.co/apple/DFN5B-CLIP-ViT-H-14-378/resolve/main/open_clip_pytorch_model.bin
+
 ```
 
 
@@ -92,60 +93,175 @@ pip install qwen-vl-utils==0.0.14
 ```bash
 bash vllm_utils/vllm_server_UnifiedReward_Think.sh  
 ```
-#### 2. Preprocess training Data 
-we use training prompts in [UniGenBench](https://github.com/CodeGoat24/UniGenBench), as shown in ```"./data/unigenbench_train_data.txt"```.
+#### 2. Model-specific workflows (click to expand)
+We use training prompts in [UniGenBench](https://github.com/CodeGoat24/UniGenBench), as shown in ```"./data/unigenbench_train_data.txt"```.
 
+<details>
+<summary><strong>FLUX.1-dev</strong></summary>
+
+##### Preprocess training Data
 ```bash
-# FLUX.1-dev
 bash fastvideo/data_preprocess/preprocess_flux_rl_embeddings.sh
+```
 
-# Qwen-Image
+##### Train
+```bash
+# Pref-GRPO
+## UnifiedReward-Flex
+bash scripts/full_train/finetune_ur_flex_prefgrpo_flux.sh
+## UnifiedReward-Think
+bash scripts/full_train/finetune_prefgrpo_flux.sh
+
+
+# UnifiedReward for Point Score-based GRPO
+bash scripts/full_train/finetune_unifiedreward_flux.sh
+```
+</details>
+
+<details>
+<summary><strong>Qwen-Image</strong></summary>
+
+##### Preprocess training Data
+```bash
 pip install diffusers==0.35.0 peft==0.17.0 transformers==4.56.0
 
 bash fastvideo/data_preprocess/preprocess_qwen_image_rl_embeddings.sh
-
-# Wan2.1
-bash fastvideo/data_preprocess/preprocess_wan_2_1_rl_embeddings.sh.sh
 ```
 
-
-#### 3. Train
+##### Train
 ```bash
-# FLUX.1-dev
-## UnifiedReward-Think for Pref-GRPO
-bash scripts/full_train/finetune_prefgrpo_flux.sh
-
-## UnifiedReward for Point Score-based GRPO
-bash scripts/full_train/finetune_unifiedreward_flux.sh
-
-# Qwen-Image
 ## UnifiedReward-Think for Pref-GRPO
 bash scripts/full_train/finetune_prefgrpo_qwenimage_grpo.sh
 
 ## UnifiedReward for Point Score-based GRPO
 bash scripts/full_train/finetune_unifiedreward_qwenimage_grpo.sh
-
-# Wan2.1
-## Pref-GRPO
-bash scripts/full_train/finetune_prefgrpo_wan_2_1.sh
 ```
+</details>
+
+<details>
+<summary><strong>Wan2.1</strong></summary>
+
+##### Preprocess training Data
+```bash
+bash fastvideo/data_preprocess/preprocess_wan_2_1_rl_embeddings.sh.sh
+```
+
+##### Train
+```bash
+# Pref-GRPO
+## UnifiedReward-Flex
+bash scripts/lora/finetune_ur_flex_prefgrpo_wan_2_1_lora.sh
+
+## UnifiedReward-Think
+bash scripts/lora/finetune_prefgrpo_wan_2_1_lora.sh
+```
+</details>
+
 
 
 ### 🧩 Reward Models & Usage
 We support multiple reward models via the dispatcher in `fastvideo/rewards/dispatcher.py`.
 Reward model checkpoint paths are configured in `fastvideo/rewards/reward_paths.py`.
+Supported reward models (click to expand for setup details):
 
-Supported reward models:
-- `aesthetic`
-- `clip`
-- `hpsv2`
-- `hpsv3`
-- `pickscore`
-- `unifiedreward_think`
-- `unifiedreward_alignment`
-- `unifiedreward_style`
-- `unifiedreward_coherence`
-- `videoalign`
+<details>
+<summary><strong><code>aesthetic</code></strong></summary>
+
+- **Set in `fastvideo/rewards/reward_paths.py`:**
+  - `aesthetic_ckpt`: path to the Aesthetic MLP checkpoint (`assets/sac+logos+ava1-l14-linearMSE.pth`)
+  - `aesthetic_clip`: HuggingFace CLIP model id (`openai/clip-vit-large-patch14`)
+  </details>
+
+<details>
+<summary><strong><code>clip</code></strong></summary>
+
+- **Download weights:**
+```bash
+wget https://huggingface.co/apple/DFN5B-CLIP-ViT-H-14-378/resolve/main/open_clip_pytorch_model.bin
+```
+
+- **Set in `fastvideo/rewards/reward_paths.py`:**
+  - `clip_pretrained`: path to OpenCLIP weights (used by CLIP reward)
+  </details>
+
+<details>
+<summary><strong><code>hpsv2</code></strong></summary>
+
+- **Set in `fastvideo/rewards/reward_paths.py`:**
+  - `hpsv2_ckpt`: path to [HPS_v2.1_compressed.pt](https://huggingface.co/xswu/HPSv2/tree/main)
+  - `clip_pretrained`: path to OpenCLIP weights (required by HPSv2)
+  </details>
+
+<details>
+<summary><strong><code>hpsv3</code></strong></summary>
+
+- **Set in `fastvideo/rewards/reward_paths.py`:**
+  - `hpsv3_ckpt`: path to [HPSv3](https://huggingface.co/MizzenAI/HPSv3) checkpoint
+  </details>
+
+<details>
+<summary><strong><code>pickscore</code></strong></summary>
+
+- **Set in `fastvideo/rewards/reward_paths.py`:**
+  - `pickscore_processor`: HuggingFace processor id ([CLIP-ViT-H-14-laion2B-s32B-b79K](https://huggingface.co/laion/CLIP-ViT-H-14-laion2B-s32B-b79K))
+  - `pickscore_model`: HuggingFace model id ([Pickscore_v1](https://huggingface.co/yuvalkirstain/PickScore_v1))
+  </details>
+
+<details>
+<summary><strong><code>videoalign</code></strong></summary>
+
+- **Set in `fastvideo/rewards/reward_paths.py`:**
+  - `videoalign_ckpt`: path to [VideoAlign](https://huggingface.co/KlingTeam/VideoReward) checkpoint directory
+  </details>
+
+<details>
+<summary><strong><code>unifiedreward_alignment</code></strong></summary>
+
+- **Start server:**
+```bash
+bash vllm_utils/vllm_server_UnifiedReward.sh  
+```
+</details>
+
+
+<details>
+<summary><strong><code>unifiedreward_style</code></strong></summary>
+
+- **Start server:**
+```bash
+bash vllm_utils/vllm_server_UnifiedReward.sh  
+```
+</details>
+
+<details>
+<summary><strong><code>unifiedreward_coherence</code></strong></summary>
+
+- **Start server:**
+
+```bash
+bash vllm_utils/vllm_server_UnifiedReward.sh  
+```
+</details>
+
+<details>
+<summary><strong><code>unifiedreward_think</code></strong></summary>
+
+- **Start server:**
+
+```bash
+bash vllm_utils/vllm_server_UnifiedReward_Think.sh  
+```
+</details>
+
+<details>
+<summary><strong><code>unifiedreward_flex</code></strong></summary>
+
+- **Start server:**
+
+```bash
+bash vllm_utils/vllm_server_UnifiedReward_Flex.sh  
+```
+</details>
 
 #### Set rewards in your training/eval scripts
 Use `--reward_spec` to choose which rewards to compute and (optionally) their weights.
@@ -175,6 +291,7 @@ bash inference/qwen_image_dist_infer.sh
 
 # Wan2.1
 bash inference/wan_dist_infer.sh
+bash inference/wan_eval_vbench.sh
 ```
 
 Then, evaluate the outputs following [UniGenBench](https://github.com/CodeGoat24/UniGenBench).

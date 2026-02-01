@@ -523,6 +523,7 @@ def compute_weighted_advantages(
     gather_tensor,
     use_group: bool,
     num_generations: int,
+    apply_gdpo: bool = False,
 ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
     if not reward_tensors:
         raise ValueError("reward_tensors is empty; cannot compute advantages.")
@@ -547,4 +548,10 @@ def compute_weighted_advantages(
             adv = (rewards - gathered_reward.mean()) / (gathered_reward.std() + 1e-8)
         reward_advantages[name] = adv
         advantages = advantages + reward_weights.get(name, 0.0) * adv
+        
+    if apply_gdpo:
+        gathered_advantages = gather_tensor(advantages)
+        advantages = (advantages - gathered_advantages.mean()) / (
+            gathered_advantages.std() + 1e-8
+        )
     return advantages, reward_advantages
