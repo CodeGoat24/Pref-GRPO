@@ -211,6 +211,8 @@ def _pairwise_win_rate(
             dim_mean_rates.append(0.0)
 
     dim_reward["dim_mean_reward"] = dim_mean_rates
+    dim_reward["dim_rate_flags"] = dim_rate_flags
+
 
     for dim_key in dim_keys:
         dim_reward[dim_key] = [

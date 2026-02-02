@@ -20,6 +20,7 @@ from fastvideo.rewards.templates import (
 )
 from fastvideo.rewards.unifiedreward import extract_normalized_rewards
 from fastvideo.rewards.unifiedreward_flex import (
+    _get_env_float as _flex_get_env_float,
     cal_win_rate_images as cal_flex_win_rate_images,
     cal_win_rate_videos as cal_flex_win_rate_videos,
 )
@@ -475,6 +476,25 @@ class RewardDispatcher:
             if not rewards_list:
                 raise ValueError("No UnifiedReward-Flex inputs provided.")
             reward_tensors["unifiedreward_flex"] = torch.cat(rewards_list, dim=0)
+            if getattr(self.args, "apply_gdpo", False):
+                overall = torch.tensor(
+                    dim_reward_local.get("overall_reward", []),
+                    device=self.device,
+                    dtype=reward_tensors["unifiedreward_flex"].dtype,
+                )
+                dim_mean = torch.tensor(
+                    dim_reward_local.get("dim_mean_reward", []),
+                    device=self.device,
+                    dtype=reward_tensors["unifiedreward_flex"].dtype,
+                )
+                dim_flags = dim_reward_local.get(
+                    "dim_rate_flags",
+                    [True] * len(reward_tensors["unifiedreward_flex"]),
+                )
+                dim_mask = torch.tensor(dim_flags, device=self.device, dtype=torch.bool)
+                reward_tensors["unifiedreward_flex_overall"] = overall
+                reward_tensors["unifiedreward_flex_dim_mean"] = dim_mean
+                reward_tensors["unifiedreward_flex_dim_mask"] = dim_mask
             dim_reward.update(dim_reward_local)
 
         if "videoalign" in reward_inputs:
@@ -529,26 +549,53 @@ def compute_weighted_advantages(
         raise ValueError("reward_tensors is empty; cannot compute advantages.")
     advantages = torch.zeros_like(next(iter(reward_tensors.values())))
     reward_advantages: Dict[str, torch.Tensor] = {}
-    for name in reward_weights.keys():
-        if name not in reward_tensors:
-            raise ValueError(f"Missing reward tensor for: {name}")
-        rewards = reward_tensors[name]
+
+    def _compute_adv(rewards: torch.Tensor) -> torch.Tensor:
         if use_group:
             n = len(rewards) // num_generations
-            adv = torch.zeros_like(rewards)
+            adv_local = torch.zeros_like(rewards)
             for i in range(n):
                 start_idx = i * num_generations
                 end_idx = (i + 1) * num_generations
                 group_rewards = rewards[start_idx:end_idx]
                 group_mean = group_rewards.mean()
                 group_std = group_rewards.std() + 1e-8
-                adv[start_idx:end_idx] = (group_rewards - group_mean) / group_std
+                adv_local[start_idx:end_idx] = (group_rewards - group_mean) / group_std
+            return adv_local
+        gathered_reward = gather_tensor(rewards)
+        return (rewards - gathered_reward.mean()) / (gathered_reward.std() + 1e-8)
+
+    for name in reward_weights.keys():
+        if name not in reward_tensors:
+            raise ValueError(f"Missing reward tensor for: {name}")
+        rewards = reward_tensors[name]
+        if apply_gdpo and name == "unifiedreward_flex":
+            overall_key = "unifiedreward_flex_overall"
+            dim_key = "unifiedreward_flex_dim_mean"
+            mask_key = "unifiedreward_flex_dim_mask"
+            if (
+                overall_key in reward_tensors
+                and dim_key in reward_tensors
+                and mask_key in reward_tensors
+            ):
+                overall_adv = _compute_adv(reward_tensors[overall_key])
+                dim_adv = _compute_adv(reward_tensors[dim_key])
+                overall_weight = _flex_get_env_float("OVERALL_WEIGHT", 1.0)
+                dim_weight = _flex_get_env_float("DIM_WEIGHT", 1.0)
+                if dim_weight > 0:
+                    blended = (overall_weight * overall_adv + dim_weight * dim_adv) / (
+                        overall_weight + dim_weight
+                    )
+                    mask = reward_tensors[mask_key].to(dtype=torch.bool)
+                    adv = torch.where(mask, blended, overall_adv)
+                else:
+                    adv = overall_adv
+            else:
+                adv = _compute_adv(rewards)
         else:
-            gathered_reward = gather_tensor(rewards)
-            adv = (rewards - gathered_reward.mean()) / (gathered_reward.std() + 1e-8)
+            adv = _compute_adv(rewards)
         reward_advantages[name] = adv
         advantages = advantages + reward_weights.get(name, 0.0) * adv
-        
     if apply_gdpo:
         gathered_advantages = gather_tensor(advantages)
         advantages = (advantages - gathered_advantages.mean()) / (
