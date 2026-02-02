@@ -31,7 +31,7 @@ COMMON_TRAIN_ARGS=(
   --rationorm
   --eval_every_steps 10
   --eval_num_prompts 64
-  # --apply_gdpo
+  --apply_gdpo
   # --use_ema
   # --ema_update_interval 1
   # --ema_decay 0.99
