@@ -17,8 +17,6 @@
 <a href="https://github.com/CodeGoat24/UniGenBench">
 <img src='https://img.shields.io/badge/Benchmark-UniGenBench-green' alt='Project Page'></a>
 
-
-
 [![Hugging Face Spaces](https://img.shields.io/badge/%F0%9F%A4%97%20UniGenBench%20-Leaderboard_(English)-brown)](https://huggingface.co/spaces/CodeGoat24/UniGenBench_Leaderboard)
 [![Hugging Face Spaces](https://img.shields.io/badge/%F0%9F%A4%97%20UniGenBench%20-Leaderboard_(Chinese)-red)](https://huggingface.co/spaces/CodeGoat24/UniGenBench_Leaderboard_Chinese)
 [![Hugging Face Spaces](https://img.shields.io/badge/%F0%9F%A4%97%20UniGenBench%20-Leaderboard_(English%20Long)-orange)](https://huggingface.co/spaces/CodeGoat24/UniGenBench_Leaderboard_English_Long)
@@ -35,6 +33,9 @@ Please leave us a star ⭐ if you find this work helpful.
 
 - [2026/01] 🔥 **Tongyi Lab** improves Pref-GRPO on open-ended agents in [ArenaRL: Scaling RL for Open-Ended Agents via Tournament-based Relative Ranking](https://arxiv.org/pdf/2601.06487). Thanks to all contributors!
 
+<details>
+<summary><strong>More News</strong></summary>
+
 - [2025/11] 🔥🔥 We release **Qwen-Image**, **Wan2.1** and **FLUX.1-dev** Full/LoRA training code.
 
 - [2025/11] 🔥🔥 **Nano Banana Pro**, **FLUX.2-dev** and **Z-Image** are added to all 🏅Leaderboard.
@@ -42,6 +43,7 @@ Please leave us a star ⭐ if you find this work helpful.
 - [2025/10] 🔥 **Alibaba Group** proves the effectiveness of Pref-GRPO on aligning LLMs in [Taming the Judge: Deconflicting AI Feedback for Stable Reinforcement Learning](https://arxiv.org/pdf/2510.15514). Thanks to all contributors!
 - [2025/9] 🔥 **Seedream-4.0**, **GPT-4o**, **Imagen-4-Ultra**, **Nano Banana**, **Lumina-DiMOO**, **OneCAT**, **Echo-4o**, **OmniGen2**, and **Infinity** are added to all 🏅Leaderboard.
 - [2025/8] 🔥 We release 🏅[Leaderboard(**English**)](https://huggingface.co/spaces/CodeGoat24/UniGenBench_Leaderboard), 🏅[Leaderboard (**English Long**)](https://huggingface.co/spaces/CodeGoat24/UniGenBench_Leaderboard_English_Long), 🏅[Leaderboard (**Chinese Long**)](https://huggingface.co/spaces/CodeGoat24/UniGenBench_Leaderboard_Chinese_Long) and 🏅[Leaderboard(**Chinese**)](https://huggingface.co/spaces/CodeGoat24/UniGenBench_Leaderboard_Chinese).
+</details>
 
 
 
@@ -74,31 +76,25 @@ cd ..
 
 ```
 
-3. Download Models
+3. Install vLLM (for UnifiedReward-based rewards)
+```bash
+conda create -n vllm
+conda activate vllm
+pip install vllm>=0.11.0
+pip install qwen-vl-utils==0.0.14
+```
+
+4. Download Models
 ```bash
 huggingface-cli download CodeGoat24/UnifiedReward-2.0-qwen3vl-8b
 huggingface-cli download CodeGoat24/UnifiedReward-Think-qwen3vl-8b
 huggingface-cli download CodeGoat24/UnifiedReward-Flex-qwen3vl-8b
-
-
 ```
 
 
 ## 💻 Training
 
-#### 1. Deploy vLLM server
-
-1. Install vLLM
-```bash
-pip install vllm>=0.11.0
-
-pip install qwen-vl-utils==0.0.14
-```
-2. Start server
-```bash
-bash vllm_utils/vllm_server_UnifiedReward_Think.sh  
-```
-#### 2. Model-specific workflows (click to expand)
+#### 1. Model-specific workflows (click to expand)
 We use training prompts in [UniGenBench](https://github.com/CodeGoat24/UniGenBench), as shown in ```"./data/unigenbench_train_data.txt"```.
 
 <details>
@@ -148,6 +144,7 @@ pip install diffusers==0.35.0 peft==0.17.0 transformers==4.56.0
 bash fastvideo/data_preprocess/preprocess_qwen_image_rl_embeddings.sh
 ```
 
+
 ##### Train
 ```bash
 ## UnifiedReward-Think for Pref-GRPO
@@ -184,104 +181,88 @@ We support multiple reward models via the dispatcher in `fastvideo/rewards/dispa
 Reward model checkpoint paths are configured in `fastvideo/rewards/reward_paths.py`.
 Supported reward models (click to expand for setup details):
 
-<details>
-<summary><strong><code>aesthetic</code></strong></summary>
 
-- **Set in `fastvideo/rewards/reward_paths.py`:**
-  - `aesthetic_ckpt`: path to the Aesthetic MLP checkpoint (`assets/sac+logos+ava1-l14-linearMSE.pth`)
-  - `aesthetic_clip`: HuggingFace CLIP model id (`openai/clip-vit-large-patch14`)
+
+<details>
+<summary><strong><span style="font-size:1.05em">aesthetic</span></strong></summary>
+
+<strong>Set in `fastvideo/rewards/reward_paths.py`</strong><br>
+`aesthetic_ckpt`: path to the Aesthetic MLP checkpoint (`assets/sac+logos+ava1-l14-linearMSE.pth`)<br>
+`aesthetic_clip`: HuggingFace CLIP model id (`openai/clip-vit-large-patch14`)
   </details>
 
 <details>
-<summary><strong><code>clip</code></strong></summary>
+<summary><strong><span style="font-size:1.05em">clip</span></strong></summary>
 
-- **Download weights:**
+<strong>Download weights</strong>
 ```bash
 wget https://huggingface.co/apple/DFN5B-CLIP-ViT-H-14-378/resolve/main/open_clip_pytorch_model.bin
 ```
 
-- **Set in `fastvideo/rewards/reward_paths.py`:**
-  - `clip_pretrained`: path to OpenCLIP weights (used by CLIP reward)
+<strong>Set in `fastvideo/rewards/reward_paths.py`</strong><br>
+`clip_pretrained`: path to OpenCLIP weights (used by CLIP reward)
   </details>
 
 <details>
-<summary><strong><code>hpsv2</code></strong></summary>
+<summary><strong><span style="font-size:1.05em">hpsv2</span></strong></summary>
 
-- **Set in `fastvideo/rewards/reward_paths.py`:**
-  - `hpsv2_ckpt`: path to [HPS_v2.1_compressed.pt](https://huggingface.co/xswu/HPSv2/tree/main)
-  - `clip_pretrained`: path to OpenCLIP weights (required by HPSv2)
+<strong>Set in `fastvideo/rewards/reward_paths.py`</strong><br>
+`hpsv2_ckpt`: path to [HPS_v2.1_compressed.pt](https://huggingface.co/xswu/HPSv2/tree/main)<br>
+`clip_pretrained`: path to OpenCLIP weights (required by HPSv2)
   </details>
 
 <details>
-<summary><strong><code>hpsv3</code></strong></summary>
+<summary><strong><span style="font-size:1.05em">hpsv3</span></strong></summary>
 
-- **Set in `fastvideo/rewards/reward_paths.py`:**
-  - `hpsv3_ckpt`: path to [HPSv3](https://huggingface.co/MizzenAI/HPSv3) checkpoint
+<strong>Set in `fastvideo/rewards/reward_paths.py`</strong><br>
+`hpsv3_ckpt`: path to [HPSv3](https://huggingface.co/MizzenAI/HPSv3) checkpoint
   </details>
 
 <details>
-<summary><strong><code>pickscore</code></strong></summary>
+<summary><strong><span style="font-size:1.05em">pickscore</span></strong></summary>
 
-- **Set in `fastvideo/rewards/reward_paths.py`:**
-  - `pickscore_processor`: HuggingFace processor id ([CLIP-ViT-H-14-laion2B-s32B-b79K](https://huggingface.co/laion/CLIP-ViT-H-14-laion2B-s32B-b79K))
-  - `pickscore_model`: HuggingFace model id ([Pickscore_v1](https://huggingface.co/yuvalkirstain/PickScore_v1))
+<strong>Set in `fastvideo/rewards/reward_paths.py`</strong><br>
+`pickscore_processor`: HuggingFace processor id ([CLIP-ViT-H-14-laion2B-s32B-b79K](https://huggingface.co/laion/CLIP-ViT-H-14-laion2B-s32B-b79K))<br>
+`pickscore_model`: HuggingFace model id ([Pickscore_v1](https://huggingface.co/yuvalkirstain/PickScore_v1))
   </details>
 
-<details>
-<summary><strong><code>videoalign</code></strong></summary>
-
-- **Set in `fastvideo/rewards/reward_paths.py`:**
-  - `videoalign_ckpt`: path to [VideoAlign](https://huggingface.co/KlingTeam/VideoReward) checkpoint directory
-  </details>
 
 <details>
-<summary><strong><code>unifiedreward_alignment</code></strong></summary>
+<summary><strong><span style="font-size:1.05em">unifiedreward (alignment / style / coherence)</span></strong></summary>
 
-- **Start server:**
-```bash
-bash vllm_utils/vllm_server_UnifiedReward.sh  
-```
-</details>
-
-
-<details>
-<summary><strong><code>unifiedreward_style</code></strong></summary>
-
-- **Start server:**
+<strong>Start server</strong><br>
+Targets: `unifiedreward_alignment`, `unifiedreward_style`, `unifiedreward_coherence`
 ```bash
 bash vllm_utils/vllm_server_UnifiedReward.sh  
 ```
 </details>
 
 <details>
-<summary><strong><code>unifiedreward_coherence</code></strong></summary>
+<summary><strong><span style="font-size:1.05em">unifiedreward_think</span></strong></summary>
 
-- **Start server:**
-
-```bash
-bash vllm_utils/vllm_server_UnifiedReward.sh  
-```
-</details>
-
-<details>
-<summary><strong><code>unifiedreward_think</code></strong></summary>
-
-- **Start server:**
-
+<strong>Start server</strong><br>
+Target: `unifiedreward_think`
 ```bash
 bash vllm_utils/vllm_server_UnifiedReward_Think.sh  
 ```
 </details>
 
 <details>
-<summary><strong><code>unifiedreward_flex</code></strong></summary>
+<summary><strong><span style="font-size:1.05em">unifiedreward_flex</span></strong></summary>
 
-- **Start server:**
-
+<strong>Start server</strong><br>
+Target: `unifiedreward_flex`
 ```bash
 bash vllm_utils/vllm_server_UnifiedReward_Flex.sh  
 ```
 </details>
+
+<details>
+<summary><strong><span style="font-size:1.05em">videoalign</span></strong></summary>
+
+<strong>Set in `fastvideo/rewards/reward_paths.py`</strong><br>
+`videoalign_ckpt`: path to [VideoAlign](https://huggingface.co/KlingTeam/VideoReward) checkpoint directory
+  </details>
 
 #### Set rewards in your training/eval scripts
 Use `--reward_spec` to choose which rewards to compute and (optionally) their weights.
@@ -303,18 +284,38 @@ Examples:
 ### 🚀 Inference and Evaluation
 we use test prompts in [UniGenBench](https://github.com/CodeGoat24/UniGenBench), as shown in ```"./data/unigenbench_test_data.csv"```.
 
+<details>
+<summary><strong>FLUX.1-dev</strong></summary>
 
 ```bash
-# FLUX.1-dev
 bash inference/flux_dist_infer.sh
+```
+</details>
 
-# Qwen-Image
+<details>
+<summary><strong>Qwen-Image</strong></summary>
+
+```bash
 bash inference/qwen_image_dist_infer.sh
+```
+</details>
 
-# Wan2.1
+<details>
+<summary><strong>FLUX.2-Klein</strong></summary>
+
+```bash
+bash inference/flux2_klein_dist_infer.sh
+```
+</details>
+
+<details>
+<summary><strong>Wan2.1</strong></summary>
+
+```bash
 bash inference/wan_dist_infer.sh
 bash inference/wan_eval_vbench.sh
 ```
+</details>
 
 Then, evaluate the outputs following [UniGenBench](https://github.com/CodeGoat24/UniGenBench).
 
