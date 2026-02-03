@@ -54,7 +54,6 @@ TRAIN_ARGS=(
   --eval_every_steps 10
   --eval_num_prompts 64
 )
-export PYTHONPATH="$(pwd):${PYTHONPATH:-}"
 
 torchrun --nnodes=4 --nproc_per_node=8 --node_rank=${RANK} --master_addr=${MASTER_ADDR} --master_port=8081 \
   fastvideo/train_wan_2_1.py \

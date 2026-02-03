@@ -21,7 +21,7 @@ export TOKENIZERS_PARALLELISM=false
 export TRANSFORMERS_VERBOSITY=error
 export DIFFUSERS_VERBOSITY=error
 
-torchrun --nproc_per_node=$GPU_NUM --master_port 19000 inference/wan_evaluation.py \
+torchrun --nproc_per_node=$GPU_NUM --master_port 19000 inference/py/wan_evaluation.py \
     --model_path ${MODEL_PATH} \
     --output_dir $OUTPUT_DIR \
     --prompt_dir ./data/vbench.txt \

@@ -28,6 +28,9 @@
 ## 🔥 News
 Please leave us a star ⭐ if you find this work helpful.
 
+
+- [2026/02] 🔥 We release **FLUX.2-Klein** LoRA training code!!
+
 - [2026/02] 🔥 We release [UnifiedReward-Flex](https://codegoat24.github.io/UnifiedReward/flex)-based GRPO for both image and video generation!!
 
 - [2026/01] 🔥 **Tongyi Lab** improves Pref-GRPO on open-ended agents in [ArenaRL: Scaling RL for Open-Ended Agents via Tournament-based Relative Ranking](https://arxiv.org/pdf/2601.06487). Thanks to all contributors!
@@ -110,13 +113,28 @@ bash fastvideo/data_preprocess/preprocess_flux_rl_embeddings.sh
 ```bash
 # Pref-GRPO
 ## UnifiedReward-Flex
-bash scripts/full_train/finetune_ur_flex_prefgrpo_flux.sh
+bash scripts/full_train/ur_flex_prefgrpo_flux.sh
 ## UnifiedReward-Think
-bash scripts/full_train/finetune_prefgrpo_flux.sh
+bash scripts/full_train/ur_think_prefgrpo_flux.sh
 
 
 # UnifiedReward for Point Score-based GRPO
-bash scripts/full_train/finetune_unifiedreward_flux.sh
+bash scripts/full_train/unifiedreward_flux.sh
+```
+</details>
+
+<details>
+<summary><strong>FLUX.2-Klein</strong></summary>
+
+##### Preprocess training Data (text embeddings)
+```bash
+bash fastvideo/data_preprocess/preprocess_flux2_klein_rl_embeddings.sh
+```
+
+##### Train
+```bash
+# Pref-GRPO (UnifiedReward-Flex as example)
+bash scripts/lora/lora_ur_flex_prefgrpo_flux2_klein.sh
 ```
 </details>
 
@@ -133,10 +151,10 @@ bash fastvideo/data_preprocess/preprocess_qwen_image_rl_embeddings.sh
 ##### Train
 ```bash
 ## UnifiedReward-Think for Pref-GRPO
-bash scripts/full_train/finetune_prefgrpo_qwenimage_grpo.sh
+bash scripts/full_train/ur_think_prefgrpo_qwenimage.sh
 
 ## UnifiedReward for Point Score-based GRPO
-bash scripts/full_train/finetune_unifiedreward_qwenimage_grpo.sh
+bash scripts/full_train/unifiedreward_qwenimage.sh
 ```
 </details>
 
@@ -152,10 +170,10 @@ bash fastvideo/data_preprocess/preprocess_wan_2_1_rl_embeddings.sh.sh
 ```bash
 # Pref-GRPO
 ## UnifiedReward-Flex
-bash scripts/lora/finetune_ur_flex_prefgrpo_wan_2_1_lora.sh
+bash scripts/lora/lora_ur_flex_prefgrpo_wan_2_1.sh
 
 ## UnifiedReward-Think
-bash scripts/lora/finetune_prefgrpo_wan_2_1_lora.sh
+bash scripts/lora/lora_ur_think_prefgrpo_wan_2_1.sh
 ```
 </details>
 
@@ -284,6 +302,8 @@ Examples:
 
 ### 🚀 Inference and Evaluation
 we use test prompts in [UniGenBench](https://github.com/CodeGoat24/UniGenBench), as shown in ```"./data/unigenbench_test_data.csv"```.
+
+
 ```bash
 # FLUX.1-dev
 bash inference/flux_dist_infer.sh
