@@ -312,3 +312,74 @@ def resume_lora_optimizer(transformer, checkpoint_dir, optimizer):
     step = config_dict["step"]
     main_print(f"-->  Successfully resuming LoRA optimizer from step {step}")
     return transformer, optimizer, step
+
+
+def _unwrap_ddp_for_save(model):
+    if hasattr(model, "module"):
+        return model.module
+    return model
+
+
+def save_checkpoint_ddp(transformer, rank, output_dir, step, epoch):
+    main_print(f"--> saving checkpoint at step {step}")
+    transformer = _unwrap_ddp_for_save(transformer)
+    cpu_state = transformer.state_dict()
+    if rank <= 0:
+        save_dir = os.path.join(output_dir, f"checkpoint-{step}-{epoch}")
+        os.makedirs(save_dir, exist_ok=True)
+        weight_path = os.path.join(save_dir,
+                                   "diffusion_pytorch_model.safetensors")
+        save_file(cpu_state, weight_path)
+        config_dict = dict(transformer.config)
+        if "dtype" in config_dict:
+            del config_dict["dtype"]
+        config_path = os.path.join(save_dir, "config.json")
+        with open(config_path, "w") as f:
+            json.dump(config_dict, f, indent=4)
+    main_print(f"--> checkpoint saved at step {step}")
+
+
+def save_lora_checkpoint_ddp(transformer, optimizer, rank, output_dir, step,
+                             pipeline, epoch):
+    transformer = _unwrap_ddp_for_save(transformer)
+    full_state_dict = transformer.state_dict()
+    lora_optim_state = optimizer.state_dict()
+
+    if rank <= 0:
+        save_dir = os.path.join(output_dir, f"lora-checkpoint-{step}-{epoch}")
+        os.makedirs(save_dir, exist_ok=True)
+
+        optim_path = os.path.join(save_dir, "lora_optimizer.pt")
+        torch.save(lora_optim_state, optim_path)
+        main_print(f"--> saving LoRA checkpoint at step {step}")
+        transformer_lora_layers = get_peft_model_state_dict(
+            model=transformer, state_dict=full_state_dict)
+        pipeline.save_lora_weights(
+            save_directory=save_dir,
+            transformer_lora_layers=transformer_lora_layers,
+            is_main_process=True,
+        )
+        lora_config = {
+            "step": step,
+            "lora_params": {
+                "lora_rank": transformer.config.lora_rank,
+                "lora_alpha": transformer.config.lora_alpha,
+                "target_modules": transformer.config.lora_target_modules,
+            },
+        }
+        config_path = os.path.join(save_dir, "lora_config.json")
+        with open(config_path, "w") as f:
+            json.dump(lora_config, f, indent=4)
+    main_print(f"--> LoRA checkpoint saved at step {step}")
+
+
+def resume_lora_optimizer_ddp(transformer, checkpoint_dir, optimizer):
+    config_path = os.path.join(checkpoint_dir, "lora_config.json")
+    with open(config_path, "r") as f:
+        config_dict = json.load(f)
+    optim_path = os.path.join(checkpoint_dir, "lora_optimizer.pt")
+    optimizer_state_dict = torch.load(optim_path, weights_only=False)
+    optimizer.load_state_dict(optimizer_state_dict)
+    step = config_dict["step"]
+    main_print(f"-->  Successfully resuming LoRA optimizer from step {step}")
+    return transformer, optimizer, step

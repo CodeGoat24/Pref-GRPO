@@ -32,9 +32,9 @@ from diffusers.utils import check_min_version
 from fastvideo.dataset.flux2_klein_rl_datasets import LatentDataset, latent_collate_function
 import torch.distributed as dist
 from fastvideo.utils.checkpoint import (
-    save_checkpoint,
-    save_lora_checkpoint,
-    resume_lora_optimizer,
+    save_checkpoint_ddp,
+    save_lora_checkpoint_ddp,
+    resume_lora_optimizer_ddp,
 )
 from fastvideo.utils.logging_ import main_print
 from fastvideo.utils.config_io import dump_args_yaml
@@ -1287,7 +1287,7 @@ def main(args):
     main_print(f"optimizer: {optimizer}")
 
     if getattr(args, "use_lora", False) and args.resume_from_lora_checkpoint:
-        transformer, optimizer, init_steps = resume_lora_optimizer(
+        transformer, optimizer, init_steps = resume_lora_optimizer_ddp(
             transformer, args.resume_from_lora_checkpoint, optimizer
         )
 
@@ -1363,7 +1363,7 @@ def main(args):
                 ema.copy_to(params_to_optimize, store_temp=True)
                 ema_applied = True
             if getattr(args, "use_lora", False):
-                save_lora_checkpoint(
+                save_lora_checkpoint_ddp(
                     transformer,
                     optimizer,
                     rank,
@@ -1373,7 +1373,7 @@ def main(args):
                     epoch - 1,
                 )
             else:
-                save_checkpoint(
+                save_checkpoint_ddp(
                     transformer, rank, args.output_dir, epoch * step_per_epoch, epoch - 1
                 )
             if ema_applied:
@@ -1396,7 +1396,7 @@ def main(args):
                     ema.copy_to(params_to_optimize, store_temp=True)
                     ema_applied = True
                 if getattr(args, "use_lora", False):
-                    save_lora_checkpoint(
+                    save_lora_checkpoint_ddp(
                         transformer,
                         optimizer,
                         rank,
@@ -1406,7 +1406,7 @@ def main(args):
                         epoch,
                     )
                 else:
-                    save_checkpoint(transformer, rank, args.output_dir, step, epoch)
+                    save_checkpoint_ddp(transformer, rank, args.output_dir, step, epoch)
                 if ema_applied:
                     ema.restore(params_to_optimize)
                 dist.barrier()
