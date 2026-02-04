@@ -26,7 +26,7 @@ TRAIN_ARGS=(
   --train_batch_size 1
   --train_guidance_scale 4.0
   --dataloader_num_workers 1
-  --learning_rate 3e-6
+  --learning_rate 1e-4
   --output_dir "${OUTPUT_DIR}"
   --t 1
   --sampling_steps 25

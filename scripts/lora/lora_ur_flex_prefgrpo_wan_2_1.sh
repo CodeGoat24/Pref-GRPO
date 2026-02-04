@@ -9,7 +9,7 @@ wandb_offline ""
 
 export OVERALL_WEIGHT=0.3
 export DIM_WEIGHT=0.7
-export CATEGORY_WEIGHTS=1.0,0.7,0.3
+export CATEGORY_WEIGHTS=1.0,1.0,1.0
 
 export EXP_NAME="unifiedreward_flex_wan21_14b"
 
