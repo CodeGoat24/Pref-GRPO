@@ -1,4 +1,4 @@
-<div align="center">
+﻿<div align="center">
     <h1 align="center"> Pref-GRPO: Pairwise Preference Reward-based GRPO for Stable Text-to-Image Reinforcement Learning
     </h1>
 
@@ -23,26 +23,21 @@
 [![Hugging Face Spaces](https://img.shields.io/badge/%F0%9F%A4%97%20UniGenBench%20-Leaderboard_(Chinese%20Long)-pink)](https://huggingface.co/spaces/CodeGoat24/UniGenBench_Leaderboard_Chinese_Long)
 </div>
 
-## 🔥 News
-Please leave us a star ⭐ if you find this work helpful.
+## News
+Please leave us a star if you find this work helpful.
 
 
-- [2026/02] 🔥 We release **FLUX.2-Klein** and **Wan2.2** training code!!
-
-- [2026/02] 🔥 We release [UnifiedReward-Flex](https://codegoat24.github.io/UnifiedReward/flex)-based GRPO for both image and video generation!!
-
-- [2026/01] 🔥 **Tongyi Lab** improves Pref-GRPO on open-ended agents in [ArenaRL: Scaling RL for Open-Ended Agents via Tournament-based Relative Ranking](https://arxiv.org/pdf/2601.06487). Thanks to all contributors!
-
+- [2026/02] We release **FLUX.2-Klein (T2I/I2I)** and **Wan2.2** training code!!
+- [2026/02] We release [UnifiedReward-Flex](https://codegoat24.github.io/UnifiedReward/flex)-based Pref-GRPO for both image and video generation!!
+- [2026/01] **Tongyi Lab** improves Pref-GRPO on open-ended agents in [ArenaRL: Scaling RL for Open-Ended Agents via Tournament-based Relative Ranking](https://arxiv.org/pdf/2601.06487). Thanks to all contributors!
 <details>
 <summary><strong>More News</strong></summary>
 
-- [2025/11] 🔥🔥 We release **Qwen-Image**, **Wan2.1** and **FLUX.1-dev** Full/LoRA training code.
-
-- [2025/11] 🔥🔥 **Nano Banana Pro**, **FLUX.2-dev** and **Z-Image** are added to all 🏅Leaderboard.
-
-- [2025/10] 🔥 **Alibaba Group** proves the effectiveness of Pref-GRPO on aligning LLMs in [Taming the Judge: Deconflicting AI Feedback for Stable Reinforcement Learning](https://arxiv.org/pdf/2510.15514). Thanks to all contributors!
-- [2025/9] 🔥 **Seedream-4.0**, **GPT-4o**, **Imagen-4-Ultra**, **Nano Banana**, **Lumina-DiMOO**, **OneCAT**, **Echo-4o**, **OmniGen2**, and **Infinity** are added to all 🏅Leaderboard.
-- [2025/8] 🔥 We release 🏅[Leaderboard(**English**)](https://huggingface.co/spaces/CodeGoat24/UniGenBench_Leaderboard), 🏅[Leaderboard (**English Long**)](https://huggingface.co/spaces/CodeGoat24/UniGenBench_Leaderboard_English_Long), 🏅[Leaderboard (**Chinese Long**)](https://huggingface.co/spaces/CodeGoat24/UniGenBench_Leaderboard_Chinese_Long) and 🏅[Leaderboard(**Chinese**)](https://huggingface.co/spaces/CodeGoat24/UniGenBench_Leaderboard_Chinese).
+- [2025/11] We release **Qwen-Image**, **Wan2.1** and **FLUX.1-dev** Full/LoRA training code.
+- [2025/11] **Nano Banana Pro**, **FLUX.2-dev** and **Z-Image** are added to all Leaderboards.
+- [2025/10] **Alibaba Group** proves the effectiveness of Pref-GRPO on aligning LLMs in [Taming the Judge: Deconflicting AI Feedback for Stable Reinforcement Learning](https://arxiv.org/pdf/2510.15514). Thanks to all contributors!
+- [2025/9] **Seedream-4.0**, **GPT-4o**, **Imagen-4-Ultra**, **Nano Banana**, **Lumina-DiMOO**, **OneCAT**, **Echo-4o**, **OmniGen2**, and **Infinity** are added to all Leaderboards.
+- [2025/8] We release [Leaderboard (**English**)](https://huggingface.co/spaces/CodeGoat24/UniGenBench_Leaderboard), [Leaderboard (**English Long**)](https://huggingface.co/spaces/CodeGoat24/UniGenBench_Leaderboard_English_Long), [Leaderboard (**Chinese Long**)](https://huggingface.co/spaces/CodeGoat24/UniGenBench_Leaderboard_Chinese_Long) and [Leaderboard (**Chinese**)](https://huggingface.co/spaces/CodeGoat24/UniGenBench_Leaderboard_Chinese).
 </details>
 
 
@@ -55,11 +50,11 @@ Please leave us a star ⭐ if you find this work helpful.
 
 
 
-## 🔧 Environment Set Up
+## Environment Setup
 1. Clone this repository and navigate to the folder:
 ```bash
-git clone https://github.com/CodeGoat24/UnifiedReward.git
-cd UnifiedReward/Pref-GRPO
+git clone https://github.com/CodeGoat24/Pref-GRPO.git
+cd Pref-GRPO
 ```
 
 2. Install the training package:
@@ -80,7 +75,7 @@ cd ..
 ```bash
 conda create -n vllm
 conda activate vllm
-pip install vllm>=0.11.0
+pip install "vllm>=0.11.0"
 pip install qwen-vl-utils==0.0.14
 ```
 
@@ -89,11 +84,11 @@ pip install qwen-vl-utils==0.0.14
 huggingface-cli download CodeGoat24/UnifiedReward-2.0-qwen3vl-8b
 huggingface-cli download CodeGoat24/UnifiedReward-Think-qwen3vl-8b
 huggingface-cli download CodeGoat24/UnifiedReward-Flex-qwen3vl-8b
+huggingface-cli download CodeGoat24/UnifiedReward-Edit-qwen3vl-8b
 ```
 
 
-## 💻 Training
-
+## Training
 #### 1. Model-specific workflows (click to expand)
 We use training prompts in [UniGenBench](https://github.com/CodeGoat24/UniGenBench), as shown in ```"./data/unigenbench_train_data.txt"```.
 
@@ -120,17 +115,53 @@ bash scripts/full_train/unifiedreward_flux.sh
 </details>
 
 <details>
-<summary><strong>FLUX.2-Klein</strong></summary>
+<summary><strong>FLUX.2-Klein(T2I,I2I)</strong></summary>
 
-##### Preprocess training Data (text embeddings)
+##### Preprocess training Data (T2I)
 ```bash
 bash fastvideo/data_preprocess/preprocess_flux2_klein_rl_embeddings.sh
+```
+
+##### Preprocess training Data (I2I)
+For FLUX.2-Klein edit GRPO, prepare a jsonl dataset first.
+
+1. Put jsonl files under `data/{Image_Edit_Dataset_Name}/`.
+2. Each line must be a JSON object. Recommended fields:
+- `instruction`: edit instruction
+- `instruction_cn`: optional Chinese instruction (used when `USE_CN=1`)
+- `source_image` or `image`: source image path (required)
+- `target_image`: optional target/reference edited image path (for eval/checking only, not mandatory for rollout reward)
+3. Instruction fallback order used by code:
+- `instruction` -> `prompt` -> `caption` -> `text`
+4. Path rules:
+- Absolute path: used directly
+- Relative path: resolved against dataset root (`input_path` dir)
+- If not found, code also tries `<dataset_root>/images/<relative_path>`
+
+Minimal jsonl example:
+```json
+{"instruction":"replace the red car with a blue one","source_image":"images/0001_source.png","target_image":"images/0001_target.png"}
+{"instruction_cn":"把天空改成晚霞","source_image":"images/0002_source.jpg"}
+```
+
+Run preprocess:
+```bash
+# default: INPUT_PATH=data/Image_Edit_data, OUTPUT_DIR=data/flux2_klein_edit_embeddings
+bash fastvideo/data_preprocess/preprocess_flux2_klein_edit.sh
+
+# optional: use Chinese instruction when available
+USE_CN=1 bash fastvideo/data_preprocess/preprocess_flux2_klein_edit.sh
 ```
 
 ##### Train (examples)
 ```bash
 # Pref-GRPO (UnifiedReward-Flex as example)
 bash scripts/lora/lora_ur_flex_prefgrpo_flux2_klein.sh
+
+# Edit GRPO (UnifiedReward-Edit pointwise/prefgrpo reward example)
+bash scripts/lora/lora_ur_edit_point_flux2_klein_edit.sh
+bash scripts/lora/lora_ur_edit_prefgrpo_flux2_klein_edit.sh
+
 ```
 </details>
 
@@ -192,7 +223,7 @@ bash scripts/lora/lora_ur_flex_prefgrpo_wan22.sh
 
 
 
-### 🧩 Reward Models & Usage
+### Reward Models & Usage
 We support multiple reward models via the dispatcher in `fastvideo/rewards/dispatcher.py`.
 Reward model checkpoint paths are configured in `fastvideo/rewards/reward_paths.py`.
 Supported reward models (click to expand for setup details):
@@ -274,6 +305,34 @@ bash vllm_utils/vllm_server_UnifiedReward_Flex.sh
 </details>
 
 <details>
+<summary><strong><span style="font-size:1.05em">unifiedreward_edit</span></strong></summary>
+
+<strong>Start server (UnifiedReward-Edit)</strong><br>
+Targets:
+- `unifiedreward_edit_pairwise`
+- `unifiedreward_edit_pointwise_image_quality`
+- `unifiedreward_edit_pointwise_instruction_following`
+```bash
+bash vllm_utils/vllm_server_UnifiedReward_Edit.sh
+```
+
+<strong>Scope</strong><br>
+Edit rewards are image-only (`modality=image`) and expect edit-specific inputs:
+- pairwise: source image + two edited candidates + instruction
+- pointwise image quality: edited image only
+- pointwise instruction following: source image + edited image + instruction
+
+<strong>Optional weighting via env vars</strong><br>
+For `unifiedreward_edit_pointwise_image_quality`:
+- `EDIT_QUALITY_WEIGHT_NATURALNESS` (default `1.0`)
+- `EDIT_QUALITY_WEIGHT_ARTIFACTS` (default `1.0`)
+
+For `unifiedreward_edit_pointwise_instruction_following`:
+- `EDIT_IF_WEIGHT_SUCCESS` (default `1.0`)
+- `EDIT_IF_WEIGHT_OVEREDIT` (default `1.0`)
+</details>
+
+<details>
 <summary><strong><span style="font-size:1.05em">videoalign</span></strong></summary>
 
 <strong>Set in `fastvideo/rewards/reward_paths.py`</strong><br>
@@ -286,10 +345,14 @@ Use `--reward_spec` to choose which rewards to compute and (optionally) their we
 Examples:
 ```bash
 # Use a list of rewards (all weights = 1.0)
---reward_spec "unifiedreward_think,clip,,hpsv3"
+--reward_spec "unifiedreward_think,clip,hpsv3"
 
 # Weighted mix
 --reward_spec "unifiedreward_alignment:0.5,unifiedreward_style:1.0,unifiedreward_coherence:0.5"
+
+# Edit reward examples
+--reward_spec '{"unifiedreward_edit_pointwise_image_quality":0.5,"unifiedreward_edit_pointwise_instruction_following":0.5}'
+--reward_spec '{"unifiedreward_edit_pairwise":1.0}'
 
 # JSON formats are also supported
 --reward_spec '{"clip":0.5,"aesthetic":1.0,"hpsv2":0.5}'
@@ -297,7 +360,7 @@ Examples:
 ```
 
 
-### 🚀 Inference and Evaluation
+### Inference and Evaluation
 we use test prompts in [UniGenBench](https://github.com/CodeGoat24/UniGenBench), as shown in ```"./data/unigenbench_test_data.csv"```.
 
 <details>
@@ -344,7 +407,7 @@ bash inference/wan22_eval_vbench.sh
 
 Then, evaluate the outputs following [UniGenBench](https://github.com/CodeGoat24/UniGenBench).
 
-### 📊 Reward-based Image Scoring (UniGenBench)
+### Reward-based Image Scoring (UniGenBench)
 We provide a script to score a folder of generated images on UniGenBench using supported reward models.
 
 ```bash
@@ -359,11 +422,11 @@ Edit `tools/eval_quality.sh` to set:
 - `--output_json`: output file for scores
 
 
-## 📧 Contact
+## Contact
 If you have any comments or questions, please open a new issue or feel free to contact [Yibin Wang](https://codegoat24.github.io).
 
 
-## 🤗 Acknowledgments
+## Acknowledgments
 Our training code is based on [DanceGRPO](https://github.com/XueZeyue/DanceGRPO), [Flow-GRPO](https://github.com/yifan123/flow_grpo), and [FastVideo](https://github.com/hao-ai-lab/FastVideo).
 
 We also use [UniGenBench](https://github.com/CodeGoat24/UniGenBench) for T2I model semantic consistency evaluation.
@@ -371,7 +434,7 @@ We also use [UniGenBench](https://github.com/CodeGoat24/UniGenBench) for T2I mod
 Thanks to all the contributors!
 
 
-## ⭐ Citation
+## Citation
 ```bibtex
 @article{Pref-GRPO&UniGenBench,
   title={Pref-GRPO: Pairwise Preference Reward-based GRPO for Stable Text-to-Image Reinforcement Learning},
@@ -380,3 +443,4 @@ Thanks to all the contributors!
   year={2025}
 }
 ```
+

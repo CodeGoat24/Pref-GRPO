@@ -12,11 +12,21 @@ from fastvideo.rewards.aesthetic import AestheticScorer
 from fastvideo.rewards.clip_reward import compute_clip_score, init_clip_model
 from fastvideo.rewards.reward_paths import REWARD_MODEL_PATHS
 from fastvideo.rewards.templates import (
+    get_unifiedreward_edit_pairwise_template,
+    get_unifiedreward_edit_pointwise_image_quality_template,
+    get_unifiedreward_edit_pointwise_instruction_following_template,
     get_unifiedreward_flex_image_template,
     get_unifiedreward_flex_video_template,
     get_unifiedreward_image_template,
     get_unifiedreward_think_image_template,
     get_unifiedreward_think_video_template,
+)
+from fastvideo.rewards.unifiedreward_edit_pairwise import cal_win_rate_edit_images
+from fastvideo.rewards.unifiedreward_edit_pointwise import (
+    get_instruction_weights,
+    get_quality_weights,
+    score_edit_image_quality,
+    score_edit_instruction_following,
 )
 from fastvideo.rewards.unifiedreward import extract_normalized_rewards
 from fastvideo.rewards.unifiedreward_flex import (
@@ -33,6 +43,9 @@ SUPPORTED_REWARDS = {
     "hpsv2",
     "hpsv3",
     "pickscore",
+    "unifiedreward_edit_pairwise",
+    "unifiedreward_edit_pointwise_image_quality",
+    "unifiedreward_edit_pointwise_instruction_following",
     "unifiedreward_flex",
     "unifiedreward_think",
     "unifiedreward_alignment",
@@ -97,6 +110,12 @@ def build_reward_inputs(reward_weights: Dict[str, float]) -> Dict[str, List[dict
         reward_inputs["pickscore"] = []
     if "unifiedreward_think" in reward_weights:
         reward_inputs["unifiedreward_think"] = []
+    if "unifiedreward_edit_pairwise" in reward_weights:
+        reward_inputs["unifiedreward_edit_pairwise"] = []
+    if "unifiedreward_edit_pointwise_image_quality" in reward_weights:
+        reward_inputs["unifiedreward_edit_pointwise_image_quality"] = []
+    if "unifiedreward_edit_pointwise_instruction_following" in reward_weights:
+        reward_inputs["unifiedreward_edit_pointwise_instruction_following"] = []
     if "unifiedreward_flex" in reward_weights:
         reward_inputs["unifiedreward_flex"] = []
     if reward_spec_has_any(
@@ -413,6 +432,62 @@ class RewardDispatcher:
             reward_tensors["unifiedreward_think"] = torch.cat(rewards_list, dim=0)
             dim_reward.update(dim_reward_local)
 
+        if "unifiedreward_edit_pairwise" in reward_inputs:
+            if self.modality != "image":
+                raise ValueError("UnifiedReward edit pairwise only supports image modality.")
+            template = get_unifiedreward_edit_pairwise_template()
+            all_input_data = []
+            for item in reward_inputs["unifiedreward_edit_pairwise"]:
+                source_path = item.get("source_path")
+                edited_path = item.get("edited_path") or item.get("path")
+                instruction = item.get("instruction") or item.get("prompt") or ""
+                if not source_path or not edited_path:
+                    raise ValueError("Edit pairwise reward requires source_path and edited image path.")
+                all_input_data.append(
+                    {
+                        "source_path": source_path,
+                        "edited_path": edited_path,
+                        "problem": template.format(instruction=instruction),
+                    }
+                )
+            with torch.no_grad():
+                with torch.amp.autocast("cuda"):
+                    rewards_list, dim_reward_local = cal_win_rate_edit_images(
+                        all_input_data,
+                        api_url=self.args.api_url,
+                        device=self.device,
+                    )
+            reward_tensors["unifiedreward_edit_pairwise"] = torch.cat(rewards_list, dim=0)
+            dim_reward.update(dim_reward_local)
+
+        if "unifiedreward_edit_pointwise_image_quality" in reward_inputs:
+            if self.modality != "image":
+                raise ValueError("UnifiedReward edit pointwise only supports image modality.")
+            items = reward_inputs["unifiedreward_edit_pointwise_image_quality"]
+            dim0, dim1, combined, dim_local = score_edit_image_quality(
+                items,
+                api_url=self.args.api_url,
+                device=self.device,
+            )
+            reward_tensors["unifiedreward_edit_pointwise_image_quality_dim0"] = dim0
+            reward_tensors["unifiedreward_edit_pointwise_image_quality_dim1"] = dim1
+            reward_tensors["unifiedreward_edit_pointwise_image_quality"] = combined
+            dim_reward.update(dim_local)
+
+        if "unifiedreward_edit_pointwise_instruction_following" in reward_inputs:
+            if self.modality != "image":
+                raise ValueError("UnifiedReward edit pointwise only supports image modality.")
+            items = reward_inputs["unifiedreward_edit_pointwise_instruction_following"]
+            dim0, dim1, combined, dim_local = score_edit_instruction_following(
+                items,
+                api_url=self.args.api_url,
+                device=self.device,
+            )
+            reward_tensors["unifiedreward_edit_pointwise_instruction_following_dim0"] = dim0
+            reward_tensors["unifiedreward_edit_pointwise_instruction_following_dim1"] = dim1
+            reward_tensors["unifiedreward_edit_pointwise_instruction_following"] = combined
+            dim_reward.update(dim_local)
+
         if "unifiedreward" in reward_inputs:
             template = get_unifiedreward_image_template()
             all_input_data = [
@@ -592,6 +667,30 @@ def compute_weighted_advantages(
                     adv = overall_adv
             else:
                 adv = _compute_adv(rewards)
+        elif name == "unifiedreward_edit_pointwise_image_quality":
+            dim0_key = "unifiedreward_edit_pointwise_image_quality_dim0"
+            dim1_key = "unifiedreward_edit_pointwise_image_quality_dim1"
+            if dim0_key not in reward_tensors or dim1_key not in reward_tensors:
+                raise ValueError("Missing edit image quality dimension rewards.")
+            w0, w1 = get_quality_weights()
+            denom = w0 + w1
+            if denom <= 0:
+                denom = 1.0
+            adv0 = _compute_adv(reward_tensors[dim0_key])
+            adv1 = _compute_adv(reward_tensors[dim1_key])
+            adv = (w0 * adv0 + w1 * adv1) / denom
+        elif name == "unifiedreward_edit_pointwise_instruction_following":
+            dim0_key = "unifiedreward_edit_pointwise_instruction_following_dim0"
+            dim1_key = "unifiedreward_edit_pointwise_instruction_following_dim1"
+            if dim0_key not in reward_tensors or dim1_key not in reward_tensors:
+                raise ValueError("Missing edit instruction-following dimension rewards.")
+            w0, w1 = get_instruction_weights()
+            denom = w0 + w1
+            if denom <= 0:
+                denom = 1.0
+            adv0 = _compute_adv(reward_tensors[dim0_key])
+            adv1 = _compute_adv(reward_tensors[dim1_key])
+            adv = (w0 * adv0 + w1 * adv1) / denom
         else:
             adv = _compute_adv(rewards)
         reward_advantages[name] = adv

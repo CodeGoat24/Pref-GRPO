@@ -1,5 +1,5 @@
 GPU_NUM=8
-MODEL_PATH="FLUX.2-klein-base-9B"
+MODEL_PATH="black-forest-labs/FLUX.2-klein-base-9B"
 OUTPUT_DIR="data/flux2_klein_rl_embeddings"
 
 mkdir -p ${OUTPUT_DIR}
