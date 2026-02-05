@@ -27,7 +27,7 @@
 Please leave us a star ⭐ if you find this work helpful.
 
 
-- [2026/02] 🔥 We release **FLUX.2-Klein** LoRA training code!!
+- [2026/02] 🔥 We release **FLUX.2-Klein** and **Wan2.2** training code!!
 
 - [2026/02] 🔥 We release [UnifiedReward-Flex](https://codegoat24.github.io/UnifiedReward/flex)-based GRPO for both image and video generation!!
 
@@ -105,7 +105,7 @@ We use training prompts in [UniGenBench](https://github.com/CodeGoat24/UniGenBen
 bash fastvideo/data_preprocess/preprocess_flux_rl_embeddings.sh
 ```
 
-##### Train
+##### Train (examples)
 ```bash
 # Pref-GRPO
 ## UnifiedReward-Flex
@@ -127,7 +127,7 @@ bash scripts/full_train/unifiedreward_flux.sh
 bash fastvideo/data_preprocess/preprocess_flux2_klein_rl_embeddings.sh
 ```
 
-##### Train
+##### Train (examples)
 ```bash
 # Pref-GRPO (UnifiedReward-Flex as example)
 bash scripts/lora/lora_ur_flex_prefgrpo_flux2_klein.sh
@@ -145,7 +145,7 @@ bash fastvideo/data_preprocess/preprocess_qwen_image_rl_embeddings.sh
 ```
 
 
-##### Train
+##### Train (examples)
 ```bash
 ## UnifiedReward-Think for Pref-GRPO
 bash scripts/full_train/ur_think_prefgrpo_qwenimage.sh
@@ -160,17 +160,33 @@ bash scripts/full_train/unifiedreward_qwenimage.sh
 
 ##### Preprocess training Data
 ```bash
-bash fastvideo/data_preprocess/preprocess_wan_2_1_rl_embeddings.sh.sh
+bash fastvideo/data_preprocess/preprocess_wan21_rl_embeddings.sh
 ```
 
-##### Train
+##### Train (examples)
 ```bash
 # Pref-GRPO
 ## UnifiedReward-Flex
-bash scripts/lora/lora_ur_flex_prefgrpo_wan_2_1.sh
+bash scripts/lora/lora_ur_flex_prefgrpo_wan21.sh
 
 ## UnifiedReward-Think
-bash scripts/lora/lora_ur_think_prefgrpo_wan_2_1.sh
+bash scripts/lora/lora_ur_think_prefgrpo_wan21.sh
+```
+</details>
+
+<details>
+<summary><strong>Wan2.2</strong></summary>
+
+##### Preprocess training Data
+```bash
+bash fastvideo/data_preprocess/preprocess_wan22_rl_embeddings.sh
+```
+
+##### Train (examples)
+```bash
+# Pref-GRPO
+## UnifiedReward-Flex
+bash scripts/lora/lora_ur_flex_prefgrpo_wan22.sh
 ```
 </details>
 
@@ -312,8 +328,17 @@ bash inference/flux2_klein_dist_infer.sh
 <summary><strong>Wan2.1</strong></summary>
 
 ```bash
-bash inference/wan_dist_infer.sh
-bash inference/wan_eval_vbench.sh
+bash inference/wan21_dist_infer.sh
+bash inference/wan21_eval_vbench.sh
+```
+</details>
+
+<details>
+<summary><strong>Wan2.2</strong></summary>
+
+```bash
+bash inference/wan22_dist_infer.sh
+bash inference/wan22_eval_vbench.sh
 ```
 </details>
 

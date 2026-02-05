@@ -30,7 +30,7 @@ from tqdm.auto import tqdm
 from fastvideo.utils.fsdp_util import apply_fsdp_checkpointing
 from diffusers.optimization import get_scheduler
 from diffusers.utils import check_min_version
-from fastvideo.dataset.latent_wan_2_1_rl_datasets import LatentDataset, latent_collate_function
+from fastvideo.dataset.latent_wan21_rl_datasets import LatentDataset, latent_collate_function
 import torch.distributed as dist
 from fastvideo.utils.logging_ import main_print
 from fastvideo.utils.config_io import dump_args_yaml
@@ -65,7 +65,51 @@ def _reward_project_name(args, base):
     return f"{base}_{reward_names}{suffix}"
 
 
-def save_wan_lora_checkpoint(transformer, optimizer, pipeline, output_dir, step, epoch, rank):
+def _parse_components(raw_components: Optional[str]) -> list[str]:
+    if raw_components is None:
+        return []
+    if isinstance(raw_components, (list, tuple)):
+        components = [str(item).strip() for item in raw_components]
+    else:
+        components = [item.strip() for item in str(raw_components).split(",")]
+    return [component for component in components if component]
+
+
+def _normalize_optional_float(value: Optional[float]) -> Optional[float]:
+    if value is None:
+        return None
+    if value < 0:
+        return None
+    return float(value)
+
+
+def _get_boundary_timestep(args) -> Optional[int]:
+    boundary_ratio = _normalize_optional_float(getattr(args, "boundary_ratio", None))
+    if boundary_ratio is None:
+        return None
+    num_train_timesteps = int(getattr(args, "num_train_timesteps", 1000))
+    return int(boundary_ratio * num_train_timesteps)
+
+
+def _get_cfg_scale(args, use_transformer_2: bool) -> float:
+    if use_transformer_2:
+        cfg_2 = _normalize_optional_float(getattr(args, "cfg_infer_2", None))
+        if cfg_2 is not None:
+            return cfg_2
+    return float(args.cfg_infer)
+
+
+def save_wan_lora_checkpoint(
+    transformer,
+    transformer_2,
+    optimizer,
+    pipeline,
+    output_dir,
+    step,
+    epoch,
+    rank,
+    target_components,
+):
     if rank > 0:
         return
 
@@ -75,79 +119,84 @@ def save_wan_lora_checkpoint(transformer, optimizer, pipeline, output_dir, step,
     optim_path = os.path.join(save_dir, "lora_optimizer.pt")
     torch.save({"optimizer": optimizer.state_dict(), "step": step}, optim_path)
 
-    transformer_lora_layers = get_peft_model_state_dict(transformer)
-    pipeline.save_lora_weights(
-        save_directory=save_dir,
-        transformer_lora_layers=transformer_lora_layers,
-        is_main_process=True,
-    )
-    lora_config = {
-        "step": step,
-        "lora_params": {
+    lora_layers = {}
+    lora_metadata = {}
+    lora_config = {"step": step, "lora_params": {}, "target_components": list(target_components)}
+
+    if transformer is not None and "transformer" in target_components:
+        transformer_lora_layers = get_peft_model_state_dict(transformer)
+        lora_layers["transformer"] = transformer_lora_layers
+        lora_config["lora_params"]["transformer"] = {
             "lora_rank": transformer.config.lora_rank,
             "lora_alpha": transformer.config.lora_alpha,
             "target_modules": transformer.config.lora_target_modules,
-        },
-    }
+        }
+
+    if transformer_2 is not None and "transformer_2" in target_components:
+        transformer_2_lora_layers = get_peft_model_state_dict(transformer_2)
+        lora_layers["transformer_2"] = transformer_2_lora_layers
+        lora_config["lora_params"]["transformer_2"] = {
+            "lora_rank": transformer_2.config.lora_rank,
+            "lora_alpha": transformer_2.config.lora_alpha,
+            "target_modules": transformer_2.config.lora_target_modules,
+        }
+
+    if not lora_layers:
+        raise ValueError("No LoRA layers found for saving. Check target_components.")
+
+    pipeline._save_lora_weights(
+        save_directory=save_dir,
+        lora_layers=lora_layers,
+        lora_metadata=lora_metadata,
+        is_main_process=True,
+    )
     config_path = os.path.join(save_dir, "lora_config.json")
     with open(config_path, "w") as f:
         json.dump(lora_config, f, indent=4)
     main_print(f"--> LoRA checkpoint saved at step {step}")
 
 
-def save_wan_checkpoint(
-    args, transformer, optimizer, pipe, rank, step, epoch, ema, params_to_optimize
-):
-    ema_applied = False
-    if (
-        ema is not None
-        and getattr(args, "ema_use_in_checkpoint", True)
-        and step >= args.ema_start_step
-    ):
-        ema.copy_to(params_to_optimize, store_temp=True)
-        ema_applied = True
-    if getattr(args, "use_lora", False):
-        save_wan_lora_checkpoint(
-            transformer, optimizer, pipe, args.output_dir, step, epoch, rank
-        )
-    else:
-        cpu_state = transformer.state_dict()
-        if rank <= 0:
-            save_dir = os.path.join(args.output_dir, f"checkpoint-{step}-{epoch}")
-            os.makedirs(save_dir, exist_ok=True)
-            weight_path = os.path.join(save_dir, "diffusion_pytorch_model.safetensors")
-            save_file(cpu_state, weight_path)
-            config_dict = dict(transformer.config)
-            if "dtype" in config_dict:
-                del config_dict["dtype"]
-            config_path = os.path.join(save_dir, "config.json")
-            with open(config_path, "w") as f:
-                json.dump(config_dict, f, indent=4)
-        main_print(f"--> checkpoint saved at step {step}")
-    if ema_applied:
-        ema.restore(params_to_optimize)
-
-
-def load_wan_lora_weights(transformer, pipeline, checkpoint_dir):
+def load_wan_lora_weights(transformer, transformer_2, pipeline, checkpoint_dir):
     lora_state_dict = pipeline.lora_state_dict(checkpoint_dir)
     transformer_state_dict = {
         f'{k.replace("transformer.", "")}': v
         for k, v in lora_state_dict.items()
         if k.startswith("transformer.")
     }
+    transformer_2_state_dict = {
+        f'{k.replace("transformer_2.", "")}': v
+        for k, v in lora_state_dict.items()
+        if k.startswith("transformer_2.")
+    }
     from diffusers.utils import convert_unet_state_dict_to_peft
 
-    transformer_state_dict = convert_unet_state_dict_to_peft(transformer_state_dict)
-    incompatible_keys = set_peft_model_state_dict(
-        transformer, transformer_state_dict, adapter_name="default"
-    )
-    if incompatible_keys is not None:
-        unexpected_keys = getattr(incompatible_keys, "unexpected_keys", None)
-        if unexpected_keys:
-            main_print(
-                "Loading adapter weights from state_dict led to unexpected keys not found in the model: "
-                f"{unexpected_keys}."
-            )
+    if transformer_state_dict and transformer is not None:
+        transformer_state_dict = convert_unet_state_dict_to_peft(transformer_state_dict)
+        incompatible_keys = set_peft_model_state_dict(
+            transformer, transformer_state_dict, adapter_name="default"
+        )
+        if incompatible_keys is not None:
+            unexpected_keys = getattr(incompatible_keys, "unexpected_keys", None)
+            if unexpected_keys:
+                main_print(
+                    "Loading adapter weights from state_dict led to unexpected keys not found in the model: "
+                    f"{unexpected_keys}."
+                )
+
+    if transformer_2_state_dict:
+        if transformer_2 is None:
+            raise ValueError("Found transformer_2 LoRA weights but transformer_2 is not initialized.")
+        transformer_2_state_dict = convert_unet_state_dict_to_peft(transformer_2_state_dict)
+        incompatible_keys = set_peft_model_state_dict(
+            transformer_2, transformer_2_state_dict, adapter_name="default"
+        )
+        if incompatible_keys is not None:
+            unexpected_keys = getattr(incompatible_keys, "unexpected_keys", None)
+            if unexpected_keys:
+                main_print(
+                    "Loading adapter weights from state_dict led to unexpected keys not found in the model: "
+                    f"{unexpected_keys}."
+                )
 
 
 def resume_wan_lora_optimizer(optimizer, checkpoint_dir):
@@ -161,6 +210,33 @@ def resume_wan_lora_optimizer(optimizer, checkpoint_dir):
     optimizer.load_state_dict(state_dict)
     main_print(f"--> Successfully resumed LoRA optimizer from step {step}")
     return optimizer, step
+
+
+def save_wan_full_checkpoint(
+    transformer,
+    transformer_2,
+    output_dir,
+    step,
+    epoch,
+    rank,
+):
+    if rank > 0:
+        return
+    save_dir = os.path.join(output_dir, f"checkpoint-{step}-{epoch}")
+    for name, model in (("transformer", transformer), ("transformer_2", transformer_2)):
+        if model is None:
+            continue
+        model_dir = os.path.join(save_dir, name)
+        os.makedirs(model_dir, exist_ok=True)
+        weight_path = os.path.join(model_dir, "diffusion_pytorch_model.safetensors")
+        save_file(model.state_dict(), weight_path)
+        config_dict = dict(model.config)
+        if "dtype" in config_dict:
+            del config_dict["dtype"]
+        config_path = os.path.join(model_dir, "config.json")
+        with open(config_path, "w") as f:
+            json.dump(config_dict, f, indent=4)
+    main_print(f"--> checkpoint saved at step {step}")
 
 
 def video_first_frame_to_pil(video_path):
@@ -214,6 +290,7 @@ def load_eval_prompts(dataset, num_prompts, seed):
 def run_eval_videos(
     args,
     transformer,
+    transformer_2,
     vae,
     eval_prompts,
     device,
@@ -233,6 +310,7 @@ def run_eval_videos(
     sigma_schedule = sd3_time_shift(args.shift, sigma_schedule)
     video_processor = VideoProcessor(vae_scale_factor=8)
     was_training = transformer.training
+    was_training_2 = transformer_2.training if transformer_2 is not None else None
     if args.init_same_noise:
         base_latents = torch.randn(
             (1, 16, ((args.t - 1) // 4) + 1, args.h // 8, args.w // 8),
@@ -265,6 +343,7 @@ def run_eval_videos(
                     progress_bar,
                     sigma_schedule,
                     transformer,
+                    transformer_2,
                     prompt_embed.unsqueeze(0),
                     negative_prompt_embeds.unsqueeze(0),
                     True,
@@ -276,6 +355,7 @@ def run_eval_videos(
                     progress_bar,
                     sigma_schedule,
                     transformer,
+                    transformer_2,
                     prompt_embed.unsqueeze(0),
                     negative_prompt_embeds.unsqueeze(0),
                     True,
@@ -309,6 +389,11 @@ def run_eval_videos(
         transformer.train()
     else:
         transformer.eval()
+    if transformer_2 is not None:
+        if was_training_2:
+            transformer_2.train()
+        else:
+            transformer_2.eval()
 
 
 
@@ -351,12 +436,56 @@ def unpack_latents(latents, height, width, vae_scale_factor):
 
     return latents
 
+def _select_model_for_timestep(args, timestep_value, transformer, transformer_2):
+    boundary_timestep = _get_boundary_timestep(args)
+    if boundary_timestep is None or transformer_2 is None:
+        return transformer, False
+    use_transformer_2 = timestep_value < boundary_timestep
+    return (transformer_2 if use_transformer_2 else transformer), use_transformer_2
+
+
+def _forward_with_cfg(
+    model,
+    latents,
+    timesteps,
+    encoder_hidden_states,
+    negative_prompt_embeds,
+    cfg_scale,
+):
+    if cfg_scale > 1:
+        with torch.autocast("cuda", torch.bfloat16):
+            pred = model(
+                hidden_states=torch.cat([latents, latents], dim=0),
+                timestep=torch.cat([timesteps, timesteps], dim=0),
+                encoder_hidden_states=torch.cat(
+                    [encoder_hidden_states, negative_prompt_embeds], dim=0
+                ),
+                attention_kwargs=None,
+                return_dict=False,
+            )[0]
+            model_pred, uncond_pred = pred.chunk(2)
+            pred = uncond_pred.to(torch.float32) + cfg_scale * (
+                model_pred.to(torch.float32) - uncond_pred.to(torch.float32)
+            )
+    else:
+        with torch.autocast("cuda", torch.bfloat16):
+            pred = model(
+                hidden_states=latents,
+                timestep=timesteps,
+                encoder_hidden_states=encoder_hidden_states,
+                attention_kwargs=None,
+                return_dict=False,
+            )[0]
+        pred = pred.to(torch.float32)
+    return pred
+
 def run_sample_step(
         args,
         z,
         progress_bar,
         sigma_schedule,
         transformer,
+        transformer_2,
         encoder_hidden_states, 
         negative_prompt_embeds, 
         grpo_sample,
@@ -370,27 +499,19 @@ def run_sample_step(
             sigma = sigma_schedule[i]
             timestep_value = int(sigma * 1000)
             timesteps = torch.full([encoder_hidden_states.shape[0]], timestep_value, device=z.device, dtype=torch.long)
-            transformer.eval()
-            if args.cfg_infer>1:
-                with torch.autocast("cuda", torch.bfloat16):
-                    pred= transformer(
-                        hidden_states=torch.cat([z,z],dim=0),
-                        timestep=torch.cat([timesteps,timesteps],dim=0),
-                        encoder_hidden_states=torch.cat([encoder_hidden_states,negative_prompt_embeds],dim=0),
-                        attention_kwargs=None,
-                        return_dict=False,
-                    )[0]
-                    model_pred, uncond_pred = pred.chunk(2)
-                    pred  =  uncond_pred.to(torch.float32) + args.cfg_infer * (model_pred.to(torch.float32) - uncond_pred.to(torch.float32))
-            else:
-                 with torch.autocast("cuda", torch.bfloat16):
-                    pred= transformer(
-                        hidden_states=z,
-                        timestep=timesteps,
-                        encoder_hidden_states=encoder_hidden_states,
-                        attention_kwargs=None,
-                        return_dict=False,
-                    )[0]
+            current_model, use_transformer_2 = _select_model_for_timestep(
+                args, timestep_value, transformer, transformer_2
+            )
+            current_model.eval()
+            cfg_scale = _get_cfg_scale(args, use_transformer_2)
+            pred = _forward_with_cfg(
+                current_model,
+                z,
+                timesteps,
+                encoder_hidden_states,
+                negative_prompt_embeds,
+                cfg_scale,
+            )
             if args.grpo_step_mode == 'dance': 
                 if getattr(args, "rationorm", False):
                     z, pred_original, log_prob, prev_sample_mean, _, _ = dance_grpo_step(
@@ -456,6 +577,7 @@ def grpo_one_step(
             encoder_hidden_states, 
             negative_prompt_embeds, 
             transformer,
+            transformer_2,
             timesteps,
             i,
             sigma_schedule,
@@ -463,26 +585,59 @@ def grpo_one_step(
 ):
     B = encoder_hidden_states.shape[0]
     transformer.train()
-    if args.cfg_infer>1:
-        with torch.autocast("cuda", torch.bfloat16):
-            pred= transformer(
-                hidden_states=torch.cat([latents,latents],dim=0),
-                timestep=torch.cat([timesteps,timesteps],dim=0),
-                encoder_hidden_states=torch.cat([encoder_hidden_states,negative_prompt_embeds],dim=0),
-                attention_kwargs=None,
-                return_dict=False,
-            )[0]
-            model_pred, uncond_pred = pred.chunk(2)
-            pred  =  uncond_pred.to(torch.float32) + args.cfg_infer * (model_pred.to(torch.float32) - uncond_pred.to(torch.float32))
+    if transformer_2 is not None:
+        transformer_2.train()
+
+    boundary_timestep = _get_boundary_timestep(args)
+    if boundary_timestep is None or transformer_2 is None:
+        pred = _forward_with_cfg(
+            transformer,
+            latents,
+            timesteps,
+            encoder_hidden_states,
+            negative_prompt_embeds,
+            _get_cfg_scale(args, False),
+        )
     else:
-        with torch.autocast("cuda", torch.bfloat16):
-            pred= transformer(
-                hidden_states=latents,
-                timestep=timesteps,
-                encoder_hidden_states=encoder_hidden_states,
-                attention_kwargs=None,
-                return_dict=False,
-            )[0]
+        use_transformer_2 = timesteps < boundary_timestep
+        if torch.all(use_transformer_2):
+            pred = _forward_with_cfg(
+                transformer_2,
+                latents,
+                timesteps,
+                encoder_hidden_states,
+                negative_prompt_embeds,
+                _get_cfg_scale(args, True),
+            )
+        elif torch.all(~use_transformer_2):
+            pred = _forward_with_cfg(
+                transformer,
+                latents,
+                timesteps,
+                encoder_hidden_states,
+                negative_prompt_embeds,
+                _get_cfg_scale(args, False),
+            )
+        else:
+            pred = torch.empty_like(latents, dtype=torch.float32)
+            if torch.any(~use_transformer_2):
+                pred[~use_transformer_2] = _forward_with_cfg(
+                    transformer,
+                    latents[~use_transformer_2],
+                    timesteps[~use_transformer_2],
+                    encoder_hidden_states[~use_transformer_2],
+                    negative_prompt_embeds[~use_transformer_2],
+                    _get_cfg_scale(args, False),
+                )
+            if torch.any(use_transformer_2):
+                pred[use_transformer_2] = _forward_with_cfg(
+                    transformer_2,
+                    latents[use_transformer_2],
+                    timesteps[use_transformer_2],
+                    encoder_hidden_states[use_transformer_2],
+                    negative_prompt_embeds[use_transformer_2],
+                    _get_cfg_scale(args, True),
+                )
             
     if args.grpo_step_mode == 'dance': 
         z, pred_original, log_prob, prev_sample_mean, noise_scale, dt = dance_grpo_step(
@@ -561,6 +716,7 @@ def sample_reference_model(
     args,
     device, 
     transformer,
+    transformer_2,
     vae,
     encoder_hidden_states, 
     negative_prompt_embeds, 
@@ -620,6 +776,7 @@ def sample_reference_model(
                     progress_bar,
                     sigma_schedule,
                     transformer,
+                    transformer_2,
                     batch_encoder_hidden_states,
                     batch_negative_prompt_embeds,
                     grpo_sample,
@@ -632,6 +789,7 @@ def sample_reference_model(
                     progress_bar,
                     sigma_schedule,
                     transformer,
+                    transformer_2,
                     batch_encoder_hidden_states,
                     batch_negative_prompt_embeds, 
                     grpo_sample,
@@ -660,7 +818,7 @@ def sample_reference_model(
         save_path = save_rollout_video(
             decoded_video[0],
             args.output_dir,
-            f"wan_2_1_{rank}_{index}.mp4",
+            f"wan22_{rank}_{index}.mp4",
             fps=16,
         )
 
@@ -700,7 +858,9 @@ def train_one_step(
     args,
     device,
     transformer,
+    transformer_2,
     ref_transformer,
+    ref_transformer_2,
     vae,
     reward_dispatcher,
     optimizer,
@@ -763,6 +923,7 @@ def train_one_step(
             args,
             device,
             transformer,
+            transformer_2,
             vae,
             encoder_hidden_states,
             negative_prompt_embeds,
@@ -785,6 +946,7 @@ def train_one_step(
             args,
             device,
             transformer,
+            transformer_2,
             vae,
             encoder_hidden_states,
             negative_prompt_embeds,
@@ -870,6 +1032,7 @@ def train_one_step(
                     sample["encoder_hidden_states"],
                     sample["negative_prompt_embeds"],
                     transformer,
+                    transformer_2,
                     sample["timesteps"][:, _],
                     perms[i][_],
                     sigma_schedule,
@@ -883,6 +1046,7 @@ def train_one_step(
                     sample["encoder_hidden_states"],
                     sample["negative_prompt_embeds"],
                     transformer,
+                    transformer_2,
                     sample["timesteps"][:, _],
                     perms[i][_],
                     sigma_schedule,
@@ -932,6 +1096,7 @@ def train_one_step(
                             sample["encoder_hidden_states"],
                             sample["negative_prompt_embeds"],
                             ref_transformer,
+                            ref_transformer_2,
                             sample["timesteps"][:, _],
                             perms[i][_],
                             sigma_schedule,
@@ -939,23 +1104,45 @@ def train_one_step(
                         )
                     else:
                         was_training = transformer.training
+                        was_training_2 = transformer_2.training if transformer_2 is not None else None
                         transformer.eval()
+                        if transformer_2 is not None:
+                            transformer_2.eval()
                         try:
                             with disable_lora_adapters(transformer):
-                                _, prev_sample_mean_ref, noise_scale_ref, dt_ref = grpo_one_step(
-                                    args,
-                                    sample["latents"][:, _],
-                                    sample["next_latents"][:, _],
-                                    sample["encoder_hidden_states"],
-                                    sample["negative_prompt_embeds"],
-                                    transformer,
-                                    sample["timesteps"][:, _],
-                                    perms[i][_],
-                                    sigma_schedule,
-                                    return_stats=True,
-                                )
+                                if transformer_2 is not None:
+                                    with disable_lora_adapters(transformer_2):
+                                        _, prev_sample_mean_ref, noise_scale_ref, dt_ref = grpo_one_step(
+                                            args,
+                                            sample["latents"][:, _],
+                                            sample["next_latents"][:, _],
+                                            sample["encoder_hidden_states"],
+                                            sample["negative_prompt_embeds"],
+                                            transformer,
+                                            transformer_2,
+                                            sample["timesteps"][:, _],
+                                            perms[i][_],
+                                            sigma_schedule,
+                                            return_stats=True,
+                                        )
+                                else:
+                                    _, prev_sample_mean_ref, noise_scale_ref, dt_ref = grpo_one_step(
+                                        args,
+                                        sample["latents"][:, _],
+                                        sample["next_latents"][:, _],
+                                        sample["encoder_hidden_states"],
+                                        sample["negative_prompt_embeds"],
+                                        transformer,
+                                        None,
+                                        sample["timesteps"][:, _],
+                                        perms[i][_],
+                                        sigma_schedule,
+                                        return_stats=True,
+                                    )
                         finally:
                             transformer.train(was_training)
+                            if transformer_2 is not None:
+                                transformer_2.train(was_training_2)
 
                 kl_loss = compute_kl_loss(
                     prev_sample_mean, prev_sample_mean_ref, noise_scale_ref
@@ -976,7 +1163,10 @@ def train_one_step(
             dist.all_reduce(avg_loss, op=dist.ReduceOp.AVG)
             total_loss += avg_loss.item()
         if (i+1)%args.gradient_accumulation_steps==0:
-            grad_norm = torch.nn.utils.clip_grad_norm_(transformer.parameters(), max_norm=max_grad_norm)
+            clip_params = list(p for p in transformer.parameters() if p.requires_grad)
+            if transformer_2 is not None:
+                clip_params.extend(p for p in transformer_2.parameters() if p.requires_grad)
+            grad_norm = torch.nn.utils.clip_grad_norm_(clip_params, max_norm=max_grad_norm)
             optimizer.step()
             lr_scheduler.step()
             optimizer.zero_grad()
@@ -1006,8 +1196,15 @@ def main(args):
     device = torch.cuda.current_device()
     initialize_sequence_parallel_state(args.sp_size)
 
+    args.boundary_ratio = _normalize_optional_float(getattr(args, "boundary_ratio", None))
+    args.cfg_infer_2 = _normalize_optional_float(getattr(args, "cfg_infer_2", None))
+    target_components = _parse_components(getattr(args, "target_components", None))
+    if not target_components:
+        target_components = ["transformer", "transformer_2"]
+
     # If passed along, set the training seed now. On GPU...
     if args.seed is not None:
+        # TODO: t within the same seq parallel group should be the same. Noise should be different.
         set_seed(args.seed + rank)
     # We use different seeds for the noise generation in each process to ensure that the noise is different in a batch.
 
@@ -1035,11 +1232,19 @@ def main(args):
     main_print(f"--> loading model from {args.pretrained_model_name_or_path}")
     # keep the master weight to float32
     
-    transformer = WanTransformer3DModel.from_pretrained(    
-            args.pretrained_model_name_or_path,
-            subfolder="transformer",
-            torch_dtype = torch.bfloat16
+    transformer = WanTransformer3DModel.from_pretrained(
+        args.pretrained_model_name_or_path,
+        subfolder="transformer",
+        torch_dtype=torch.bfloat16,
     ).to(device)
+    transformer_2 = WanTransformer3DModel.from_pretrained(
+        args.pretrained_model_name_or_path,
+        subfolder="transformer_2",
+        torch_dtype=torch.bfloat16,
+    ).to(device)
+
+    if "transformer_2" in target_components and transformer_2 is None:
+        raise ValueError("target_components includes transformer_2 but transformer_2 is not initialized.")
 
     pipe = None
     if getattr(args, "use_lora", False):
@@ -1047,7 +1252,8 @@ def main(args):
 
         pipe = WanPipeline
         transformer.requires_grad_(False)
-        target_modules=[
+        transformer_2.requires_grad_(False)
+        target_modules = [
             "add_k_proj",
             "add_q_proj",
             "add_v_proj",
@@ -1057,42 +1263,59 @@ def main(args):
             "to_q",
             "to_v",
         ]
-        transformer_lora_config = LoraConfig(
-            r=args.lora_rank,
-            lora_alpha=args.lora_alpha,
-            init_lora_weights=True,
-            target_modules=target_modules,
-        )
-        transformer.add_adapter(transformer_lora_config)
-        transformer.config.lora_rank = args.lora_rank
-        transformer.config.lora_alpha = args.lora_alpha
-        transformer.config.lora_target_modules = target_modules
+        if "transformer" in target_components:
+            transformer_lora_config = LoraConfig(
+                r=args.lora_rank,
+                lora_alpha=args.lora_alpha,
+                init_lora_weights=True,
+                target_modules=target_modules,
+            )
+            transformer.add_adapter(transformer_lora_config)
+            transformer.config.lora_rank = args.lora_rank
+            transformer.config.lora_alpha = args.lora_alpha
+            transformer.config.lora_target_modules = target_modules
+
+        if "transformer_2" in target_components:
+            transformer_2_lora_config = LoraConfig(
+                r=args.lora_rank,
+                lora_alpha=args.lora_alpha,
+                init_lora_weights=True,
+                target_modules=target_modules,
+            )
+            transformer_2.add_adapter(transformer_2_lora_config)
+            transformer_2.config.lora_rank = args.lora_rank
+            transformer_2.config.lora_alpha = args.lora_alpha
+            transformer_2.config.lora_target_modules = target_modules
 
         if args.resume_from_lora_checkpoint:
-            load_wan_lora_weights(transformer, pipe, args.resume_from_lora_checkpoint)
+            load_wan_lora_weights(transformer, transformer_2, pipe, args.resume_from_lora_checkpoint)
+    else:
+        transformer.requires_grad_("transformer" in target_components)
+        if transformer_2 is not None:
+            transformer_2.requires_grad_("transformer_2" in target_components)
 
     if args.gradient_checkpointing:
         apply_fsdp_checkpointing(
             transformer, (WanTransformerBlock), args.selective_checkpointing
         )
+        if transformer_2 is not None:
+            apply_fsdp_checkpointing(
+                transformer_2, (WanTransformerBlock), args.selective_checkpointing
+            )
     
 
-    vae_model_path = (
-        args.vae_model_path
-        if getattr(args, "vae_model_path", None)
-        else args.pretrained_model_name_or_path
-    )
     vae = AutoencoderKLWan.from_pretrained(
-        vae_model_path,
+        args.pretrained_model_name_or_path,
         subfolder="vae",
         torch_dtype = torch.bfloat16,
     ).to(device)
 
     main_print(
-        f"--> Initializing FSDP with sharding strategy: {args.fsdp_sharding_strategy}"
+        f"--> Initializing FSDP with sharding strategy: {args.fsdp_sharding_startegy}"
     )
     # Load the reference model (optional, for KL regularization)
     ref_transformer = None
+    ref_transformer_2 = None
     kl_should_load_ref = getattr(args, "kl_beta", 0.0) > 0 or getattr(args, "kl_adaptive", False)
     if kl_should_load_ref:
         if args.kl_reference_model_name_or_path:
@@ -1101,8 +1324,15 @@ def main(args):
                 subfolder="transformer",
                 torch_dtype=torch.bfloat16,
             ).to(device)
+            ref_transformer_2 = WanTransformer3DModel.from_pretrained(
+                args.kl_reference_model_name_or_path,
+                subfolder="transformer_2",
+                torch_dtype=torch.bfloat16,
+            ).to(device)
             ref_transformer.requires_grad_(False)
             ref_transformer.eval()
+            ref_transformer_2.requires_grad_(False)
+            ref_transformer_2.eval()
         else:
             assert getattr(args, "use_lora", False), (
                 "KL regularization requires either a separate ref_transformer "
@@ -1113,11 +1343,14 @@ def main(args):
 
     # Set model as trainable.
     transformer.train()
+    if transformer_2 is not None:
+        transformer_2.train()
 
     noise_scheduler = None
 
-    params_to_optimize = transformer.parameters()
-    params_to_optimize = list(filter(lambda p: p.requires_grad, params_to_optimize))
+    params_to_optimize = list(p for p in transformer.parameters() if p.requires_grad)
+    if transformer_2 is not None:
+        params_to_optimize.extend(p for p in transformer_2.parameters() if p.requires_grad)
     ema = None
     if getattr(args, "use_ema", False):
         ema = EMAModuleWrapper(
@@ -1188,7 +1421,7 @@ def main(args):
     #vae.enable_tiling()
 
     if rank <= 0:
-        project = _reward_project_name(args, "wan2_1")
+        project = _reward_project_name(args, "wan2_2")
         wandb.init(project=project, config=args, name=args.exp_name)
 
     # Train!
@@ -1208,8 +1441,11 @@ def main(args):
     )
     main_print(f"  Gradient Accumulation steps = {args.gradient_accumulation_steps}")
     main_print(f"  Total optimization steps per epoch = {step_per_epoch}")
+    train_param_count = sum(p.numel() for p in transformer.parameters() if p.requires_grad)
+    if transformer_2 is not None:
+        train_param_count += sum(p.numel() for p in transformer_2.parameters() if p.requires_grad)
     main_print(
-        f"  Total training parameters per FSDP shard = {sum(p.numel() for p in transformer.parameters() if p.requires_grad) / 1e9} B"
+        f"  Total training parameters per FSDP shard = {train_param_count / 1e9} B"
     )
     # print dtype
     main_print(f"  Master weight dtype: {transformer.parameters().__next__().dtype}")
@@ -1224,6 +1460,7 @@ def main(args):
         run_eval_videos(
             args,
             transformer,
+            transformer_2,
             vae,
             eval_prompts,
             device,
@@ -1240,6 +1477,7 @@ def main(args):
     # Potentially load in the weights and states from a previous save
     if args.resume_from_checkpoint:
         assert NotImplementedError("resume_from_checkpoint is not supported now.")
+        # TODO
 
     progress_bar = tqdm(
         range(0, step_per_epoch * args.num_train_epochs),
@@ -1269,42 +1507,84 @@ def main(args):
             sampler.set_epoch(epoch) # Crucial for distributed shuffling per epoch       
         if epoch > 0:
             epoch_step = epoch * step_per_epoch
-            save_wan_checkpoint(
-                args,
-                transformer,
-                optimizer,
-                pipe,
-                rank,
-                epoch_step,
-                epoch - 1,
-                ema,
-                params_to_optimize,
-            )
+            ema_applied = False
+            if (
+                ema is not None
+                and getattr(args, "ema_use_in_checkpoint", True)
+                and epoch_step >= args.ema_start_step
+            ):
+                ema.copy_to(params_to_optimize, store_temp=True)
+                ema_applied = True
+            if getattr(args, "use_lora", False):
+                save_wan_lora_checkpoint(
+                    transformer,
+                    transformer_2,
+                    optimizer,
+                    pipe,
+                    args.output_dir,
+                    epoch_step,
+                    epoch - 1,
+                    rank,
+                    target_components,
+                )
+            else:
+                save_wan_full_checkpoint(
+                    transformer,
+                    transformer_2,
+                    args.output_dir,
+                    epoch_step,
+                    epoch - 1,
+                    rank,
+                )
+            if ema_applied:
+                ema.restore(params_to_optimize)
             dist.barrier()
         for step, (prompt_embeds, negative_prompt_embeds, caption) in enumerate(train_dataloader):
             prompt_embeds = prompt_embeds.to(device)
             negative_prompt_embeds = negative_prompt_embeds.to(device)
             start_time = time.time()
-            global_step = epoch * step_per_epoch + step + 1
-            if global_step % args.checkpointing_steps == 0:
-                save_wan_checkpoint(
-                    args,
-                    transformer,
-                    optimizer,
-                    pipe,
-                    rank,
-                    global_step,
-                    epoch,
-                    ema,
-                    params_to_optimize,
-                )
+            global_step = epoch * step_per_epoch + step
+            if (step-1) % args.checkpointing_steps == 0 and step!=1:
+                ema_applied = False
+                if (
+                    ema is not None
+                    and getattr(args, "ema_use_in_checkpoint", True)
+                    and global_step >= args.ema_start_step
+                ):
+                    ema.copy_to(params_to_optimize, store_temp=True)
+                    ema_applied = True
+                if getattr(args, "use_lora", False):
+                    save_wan_lora_checkpoint(
+                        transformer,
+                        transformer_2,
+                        optimizer,
+                        pipe,
+                        args.output_dir,
+                        step,
+                        epoch,
+                        rank,
+                        target_components,
+                    )
+                else:
+                    save_wan_full_checkpoint(
+                        transformer,
+                        transformer_2,
+                        args.output_dir,
+                        step,
+                        epoch,
+                        rank,
+                    )
+                if ema_applied:
+                    ema.restore(params_to_optimize)
                 dist.barrier()
 
             loss, grad_norm, dim_reward, mean_kl_loss = train_one_step(
                 args,
                 device, 
                 transformer,
+                transformer_2,
                 ref_transformer,
+                ref_transformer_2,
                 vae,
                 reward_dispatcher,
                 optimizer,
@@ -1336,6 +1616,7 @@ def main(args):
                     run_eval_videos(
                         args,
                         transformer,
+                        transformer_2,
                         vae,
                         eval_prompts,
                         device,
@@ -1386,21 +1667,6 @@ def main(args):
                 )
 
 
-
-    if args.output_dir is not None:
-        final_step = args.num_train_epochs * step_per_epoch
-        save_wan_checkpoint(
-            args,
-            transformer,
-            optimizer,
-            pipe,
-            rank,
-            final_step,
-            args.num_train_epochs - 1,
-            ema,
-            params_to_optimize,
-        )
-        dist.barrier()
 
     if get_sequence_parallel_state():
         destroy_sequence_parallel_group()
@@ -1514,6 +1780,12 @@ def build_parser():
         action="store_true",
         default=False,
         help="Enable LoRA fine-tuning (train adapters only).",
+    )
+    parser.add_argument(
+        "--target_components",
+        type=str,
+        default="transformer,transformer_2",
+        help="Comma-separated list of components to train (e.g., transformer,transformer_2).",
     )
     parser.add_argument(
         "--lora_alpha", type=int, default=256, help="Alpha parameter for LoRA."
@@ -1646,7 +1918,7 @@ def build_parser():
         help="Batch size for sequence parallel training",
     )
 
-    parser.add_argument("--fsdp_sharding_strategy", default="full")
+    parser.add_argument("--fsdp_sharding_startegy", default="full")
 
     # lr_scheduler
     parser.add_argument(
@@ -1766,6 +2038,18 @@ def build_parser():
         help="timestep downsample ratio",
     )
     parser.add_argument(
+        "--boundary_ratio",
+        type=float,
+        default=0.875,
+        help="Boundary ratio for Wan2.2 dual denoisers; set <0 to disable transformer_2.",
+    )
+    parser.add_argument(
+        "--num_train_timesteps",
+        type=int,
+        default=1000,
+        help="Number of training timesteps used to compute boundary_ratio.",
+    )
+    parser.add_argument(
         "--clip_range",
         type = float,
         default=1e-4,
@@ -1782,6 +2066,12 @@ def build_parser():
         type = float,
         default=5.0,
         help="cfg for training",
+    )
+    parser.add_argument(
+        "--cfg_infer_2",
+        type=float,
+        default=-1.0,
+        help="CFG scale for transformer_2 (low-noise stage); set <0 to reuse --cfg_infer.",
     )
     parser.add_argument(
         "--grpo_step_mode",
