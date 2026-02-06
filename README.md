@@ -27,17 +27,17 @@
 Please leave us a star if you find this work helpful.
 
 
-- [2026/02] We release **FLUX.1-Kontext-dev**, **FLUX.2-Klein (T2I/I2I)**, **Qwen-Image-Edit** and **Wan2.2** training code!!
-- [2026/02] We release [UnifiedReward-Flex](https://codegoat24.github.io/UnifiedReward/flex)-based Pref-GRPO for both image and video generation!!
+- [2026/02] Support **Z-Image**, **FLUX.1-Kontext-dev**, **FLUX.2-Klein (T2I/I2I)**, **Qwen-Image-Edit** and **Wan2.2**.
+- [2026/02] Support [UnifiedReward-Flex](https://codegoat24.github.io/UnifiedReward/flex)-based Pref-GRPO for both image and video generation.
 - [2026/01] **Tongyi Lab** improves Pref-GRPO on open-ended agents in [ArenaRL: Scaling RL for Open-Ended Agents via Tournament-based Relative Ranking](https://arxiv.org/pdf/2601.06487). Thanks to all contributors!
 <details>
 <summary><strong>More News</strong></summary>
 
-- [2025/11] We release **Qwen-Image**, **Wan2.1** and **FLUX.1-dev** Full/LoRA training code.
+- [2025/11] Support **Qwen-Image**, **Wan2.1** and **FLUX.1-dev**.
 - [2025/11] **Nano Banana Pro**, **FLUX.2-dev** and **Z-Image** are added to all Leaderboards.
 - [2025/10] **Alibaba Group** proves the effectiveness of Pref-GRPO on aligning LLMs in [Taming the Judge: Deconflicting AI Feedback for Stable Reinforcement Learning](https://arxiv.org/pdf/2510.15514). Thanks to all contributors!
 - [2025/9] **Seedream-4.0**, **GPT-4o**, **Imagen-4-Ultra**, **Nano Banana**, **Lumina-DiMOO**, **OneCAT**, **Echo-4o**, **OmniGen2**, and **Infinity** are added to all Leaderboards.
-- [2025/8] We release [Leaderboard (**English**)](https://huggingface.co/spaces/CodeGoat24/UniGenBench_Leaderboard), [Leaderboard (**English Long**)](https://huggingface.co/spaces/CodeGoat24/UniGenBench_Leaderboard_English_Long), [Leaderboard (**Chinese Long**)](https://huggingface.co/spaces/CodeGoat24/UniGenBench_Leaderboard_Chinese_Long) and [Leaderboard (**Chinese**)](https://huggingface.co/spaces/CodeGoat24/UniGenBench_Leaderboard_Chinese).
+- [2025/8] Release [Leaderboard (**English**)](https://huggingface.co/spaces/CodeGoat24/UniGenBench_Leaderboard), [Leaderboard (**English Long**)](https://huggingface.co/spaces/CodeGoat24/UniGenBench_Leaderboard_English_Long), [Leaderboard (**Chinese Long**)](https://huggingface.co/spaces/CodeGoat24/UniGenBench_Leaderboard_Chinese_Long) and [Leaderboard (**Chinese**)](https://huggingface.co/spaces/CodeGoat24/UniGenBench_Leaderboard_Chinese).
 </details>
 
 
@@ -210,6 +210,24 @@ bash scripts/full_train/ur_think_prefgrpo_qwenimage.sh
 
 ## UnifiedReward for Point Score-based GRPO
 bash scripts/full_train/unifiedreward_qwenimage.sh
+```
+</details>
+
+<details>
+<summary><strong>Z-Image</strong></summary>
+
+##### Preprocess training Data
+```bash
+bash fastvideo/data_preprocess/preprocess_z_image_rl_embeddings.sh
+```
+
+##### Train (examples)
+```bash
+## UnifiedReward-Flex for Pref-GRPO (full training)
+bash scripts/full_train/ur_flex_prefgrpo_zimage.sh
+
+## UnifiedReward-Flex for Pref-GRPO (LoRA)
+bash scripts/lora/lora_ur_flex_prefgrpo_zimage.sh
 ```
 </details>
 
