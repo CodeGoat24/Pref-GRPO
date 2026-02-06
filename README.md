@@ -27,7 +27,7 @@
 Please leave us a star if you find this work helpful.
 
 
-- [2026/02] We release **FLUX.2-Klein (T2I/I2I)** and **Wan2.2** training code!!
+- [2026/02] We release **FLUX.2-Klein (T2I/I2I)**, **Qwen-Image-Edit** and **Wan2.2** training code!!
 - [2026/02] We release [UnifiedReward-Flex](https://codegoat24.github.io/UnifiedReward/flex)-based Pref-GRPO for both image and video generation!!
 - [2026/01] **Tongyi Lab** improves Pref-GRPO on open-ended agents in [ArenaRL: Scaling RL for Open-Ended Agents via Tournament-based Relative Ranking](https://arxiv.org/pdf/2601.06487). Thanks to all contributors!
 <details>
@@ -183,6 +183,43 @@ bash scripts/full_train/ur_think_prefgrpo_qwenimage.sh
 
 ## UnifiedReward for Point Score-based GRPO
 bash scripts/full_train/unifiedreward_qwenimage.sh
+```
+</details>
+
+<details>
+<summary><strong>Qwen-Image-Edit</strong></summary>
+
+##### Preprocess training Data (edit embeddings)
+Prepare jsonl files first (default input: `data/Image_Edit_data`).
+
+Each line is a JSON object. Recommended fields:
+- `instruction` (or fallback keys: `prompt` / `caption` / `text`)
+- `instruction_cn` (optional, used when `USE_CN=1`)
+- `source_image` or `image` (required)
+- `target_image` (optional)
+
+Minimal jsonl example:
+```json
+{"instruction":"replace the red car with a blue one","source_image":"images/0001_source.png","target_image":"images/0001_target.png"}
+{"instruction_cn":"把天空改成晚霞","source_image":"images/0002_source.jpg"}
+```
+
+Run preprocess:
+```bash
+# default output: data/qwen_image_edit_embeddings
+bash fastvideo/data_preprocess/preprocess_qwen_image_edit.sh
+
+# optional: use Chinese instruction when available
+USE_CN=1 bash fastvideo/data_preprocess/preprocess_qwen_image_edit.sh
+```
+
+##### Train (examples)
+```bash
+# start UnifiedReward-Edit server first
+bash vllm_utils/vllm_server_UnifiedReward_Edit.sh
+
+# Pref-GRPO with edit pairwise reward
+bash scripts/full_train/ur_edit_prefgrpo_qwen_image_edit.sh
 ```
 </details>
 
@@ -443,4 +480,3 @@ Thanks to all the contributors!
   year={2025}
 }
 ```
-
