@@ -27,7 +27,7 @@
 Please leave us a star if you find this work helpful.
 
 
-- [2026/02] We release **FLUX.2-Klein (T2I/I2I)**, **Qwen-Image-Edit** and **Wan2.2** training code!!
+- [2026/02] We release **FLUX.1-Kontext-dev**, **FLUX.2-Klein (T2I/I2I)**, **Qwen-Image-Edit** and **Wan2.2** training code!!
 - [2026/02] We release [UnifiedReward-Flex](https://codegoat24.github.io/UnifiedReward/flex)-based Pref-GRPO for both image and video generation!!
 - [2026/01] **Tongyi Lab** improves Pref-GRPO on open-ended agents in [ArenaRL: Scaling RL for Open-Ended Agents via Tournament-based Relative Ranking](https://arxiv.org/pdf/2601.06487). Thanks to all contributors!
 <details>
@@ -93,6 +93,33 @@ huggingface-cli download CodeGoat24/UnifiedReward-Edit-qwen3vl-8b
 We use training prompts in [UniGenBench](https://github.com/CodeGoat24/UniGenBench), as shown in ```"./data/unigenbench_train_data.txt"```.
 
 <details>
+<summary><strong>Image edit dataset format</strong></summary>
+
+Put jsonl files under `data/{Image_Edit_Dataset_Name}/` (default examples use `data/Image_Edit_data`).
+
+Each line is a JSON object. Recommended fields:
+- `instruction`: edit instruction
+- `instruction_cn`: optional Chinese instruction (used when `USE_CN=1`)
+- `source_image` or `image`: source image path (required)
+- `target_image`: optional target/reference edited image path
+
+Instruction fallback order:
+- `instruction` -> `prompt` -> `caption` -> `text`
+
+Path rules:
+- absolute path: used directly
+- relative path: resolved against dataset root (`input_path` dir)
+- fallback: `<dataset_root>/images/<relative_path>`
+
+Minimal jsonl example:
+```json
+{"instruction":"replace the red car with a blue one","source_image":"images/0001_source.png","target_image":"images/0001_target.png"}
+{"instruction_cn":"把天空改成晚霞","source_image":"images/0002_source.jpg"}
+```
+
+</details>
+
+<details>
 <summary><strong>FLUX.1-dev</strong></summary>
 
 ##### Preprocess training Data
@@ -123,28 +150,6 @@ bash fastvideo/data_preprocess/preprocess_flux2_klein_rl_embeddings.sh
 ```
 
 ##### Preprocess training Data (I2I)
-For FLUX.2-Klein edit GRPO, prepare a jsonl dataset first.
-
-1. Put jsonl files under `data/{Image_Edit_Dataset_Name}/`.
-2. Each line must be a JSON object. Recommended fields:
-- `instruction`: edit instruction
-- `instruction_cn`: optional Chinese instruction (used when `USE_CN=1`)
-- `source_image` or `image`: source image path (required)
-- `target_image`: optional target/reference edited image path (for eval/checking only, not mandatory for rollout reward)
-3. Instruction fallback order used by code:
-- `instruction` -> `prompt` -> `caption` -> `text`
-4. Path rules:
-- Absolute path: used directly
-- Relative path: resolved against dataset root (`input_path` dir)
-- If not found, code also tries `<dataset_root>/images/<relative_path>`
-
-Minimal jsonl example:
-```json
-{"instruction":"replace the red car with a blue one","source_image":"images/0001_source.png","target_image":"images/0001_target.png"}
-{"instruction_cn":"把天空改成晚霞","source_image":"images/0002_source.jpg"}
-```
-
-Run preprocess:
 ```bash
 # default: INPUT_PATH=data/Image_Edit_data, OUTPUT_DIR=data/flux2_klein_edit_embeddings
 bash fastvideo/data_preprocess/preprocess_flux2_klein_edit.sh
@@ -162,6 +167,28 @@ bash scripts/lora/lora_ur_flex_prefgrpo_flux2_klein.sh
 bash scripts/lora/lora_ur_edit_point_flux2_klein_edit.sh
 bash scripts/lora/lora_ur_edit_prefgrpo_flux2_klein_edit.sh
 
+```
+</details>
+
+<details>
+<summary><strong>FLUX.1-Kontext-dev</strong></summary>
+
+##### Preprocess training Data (edit embeddings)
+```bash
+# default output: data/flux1_kontext_edit_embeddings
+bash fastvideo/data_preprocess/preprocess_flux1_kontext_edit.sh
+
+# optional: use Chinese instruction when available
+USE_CN=1 bash fastvideo/data_preprocess/preprocess_flux1_kontext_edit.sh
+```
+
+##### Train (examples)
+```bash
+# start UnifiedReward-Edit server first
+bash vllm_utils/vllm_server_UnifiedReward_Edit.sh
+
+# Pref-GRPO with edit pairwise reward
+bash scripts/lora/lora_ur_edit_prefgrpo_flux1_kontext_edit.sh
 ```
 </details>
 
@@ -190,21 +217,6 @@ bash scripts/full_train/unifiedreward_qwenimage.sh
 <summary><strong>Qwen-Image-Edit</strong></summary>
 
 ##### Preprocess training Data (edit embeddings)
-Prepare jsonl files first (default input: `data/Image_Edit_data`).
-
-Each line is a JSON object. Recommended fields:
-- `instruction` (or fallback keys: `prompt` / `caption` / `text`)
-- `instruction_cn` (optional, used when `USE_CN=1`)
-- `source_image` or `image` (required)
-- `target_image` (optional)
-
-Minimal jsonl example:
-```json
-{"instruction":"replace the red car with a blue one","source_image":"images/0001_source.png","target_image":"images/0001_target.png"}
-{"instruction_cn":"把天空改成晚霞","source_image":"images/0002_source.jpg"}
-```
-
-Run preprocess:
 ```bash
 # default output: data/qwen_image_edit_embeddings
 bash fastvideo/data_preprocess/preprocess_qwen_image_edit.sh
