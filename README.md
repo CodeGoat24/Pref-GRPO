@@ -26,7 +26,7 @@
 [![Hugging Face Spaces](https://img.shields.io/badge/%F0%9F%A4%97%20UniGenBench%20-Leaderboard_(Chinese%20Long)-pink)](https://huggingface.co/spaces/CodeGoat24/UniGenBench_Leaderboard_Chinese_Long)
 </div>
 
-## News
+## 🔥 News
 Please leave us a star if you find this work helpful.
 
 
@@ -53,7 +53,7 @@ Please leave us a star if you find this work helpful.
 
 
 
-## Environment Setup
+## 🔧 Environment Setup
 1. Clone this repository and navigate to the folder:
 ```bash
 git clone https://github.com/CodeGoat24/Pref-GRPO.git
@@ -91,7 +91,7 @@ huggingface-cli download CodeGoat24/UnifiedReward-Edit-qwen3vl-8b
 ```
 
 
-## Training
+## 💻 Training
 #### 1. Model-specific workflows (click to expand)
 We use training prompts in [UniGenBench](https://github.com/CodeGoat24/UniGenBench), as shown in ```"./data/unigenbench_train_data.txt"```.
 
@@ -293,7 +293,7 @@ bash scripts/lora/lora_ur_flex_prefgrpo_wan22.sh
 
 
 
-### Reward Models & Usage
+### 🧩 Reward Models & Usage
 We support multiple reward models via the dispatcher in `fastvideo/rewards/dispatcher.py`.
 Reward model checkpoint paths are configured in `fastvideo/rewards/reward_paths.py`.
 Supported reward models (click to expand for setup details):
@@ -430,7 +430,7 @@ Examples:
 ```
 
 
-### Inference and Evaluation
+### 🚀 Inference and Evaluation
 we use test prompts in [UniGenBench](https://github.com/CodeGoat24/UniGenBench), as shown in ```"./data/unigenbench_test_data.csv"```.
 
 <details>
@@ -477,7 +477,7 @@ bash inference/wan22_eval_vbench.sh
 
 Then, evaluate the outputs following [UniGenBench](https://github.com/CodeGoat24/UniGenBench).
 
-### Reward-based Image Scoring (UniGenBench)
+### 📊 Reward-based Image Scoring (UniGenBench)
 We provide a script to score a folder of generated images on UniGenBench using supported reward models.
 
 ```bash
@@ -492,11 +492,11 @@ Edit `tools/eval_quality.sh` to set:
 - `--output_json`: output file for scores
 
 
-## Contact
+## 📧 Contact
 If you have any comments or questions, please open a new issue or feel free to contact [Yibin Wang](https://codegoat24.github.io).
 
 
-## Acknowledgments
+## 🤗 Acknowledgments
 Our training code is based on [DanceGRPO](https://github.com/XueZeyue/DanceGRPO), [Flow-GRPO](https://github.com/yifan123/flow_grpo), and [FastVideo](https://github.com/hao-ai-lab/FastVideo).
 
 We also use [UniGenBench](https://github.com/CodeGoat24/UniGenBench) for T2I model semantic consistency evaluation.
@@ -504,7 +504,7 @@ We also use [UniGenBench](https://github.com/CodeGoat24/UniGenBench) for T2I mod
 Thanks to all the contributors!
 
 
-## Citation
+## ⭐ Citation
 ```bibtex
 @article{Pref-GRPO&UniGenBench,
   title={Pref-GRPO: Pairwise Preference Reward-based GRPO for Stable Text-to-Image Reinforcement Learning},
