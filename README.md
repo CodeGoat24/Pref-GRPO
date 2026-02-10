@@ -11,7 +11,10 @@
 <a href="https://codegoat24.github.io/UnifiedReward/Pref-GRPO">
 <img src='https://img.shields.io/badge/Project-Website-orange' alt='Project Page'></a>
 
-<a href="https://huggingface.co/CodeGoat24/FLUX.1-dev-PrefGRPO">
+<a href="https://huggingface.co/collections/CodeGoat24/unifiedreward-flex">
+<img src='https://img.shields.io/badge/Huggingface-UnifiedReward Flex-yellow' alt='Project Page'></a>
+
+<a href="https://huggingface.co/collections/CodeGoat24/pref-grpo-and-unigenbench">
 <img src='https://img.shields.io/badge/Huggingface-Model-yellow' alt='Project Page'></a>
 
 <a href="https://github.com/CodeGoat24/UniGenBench">

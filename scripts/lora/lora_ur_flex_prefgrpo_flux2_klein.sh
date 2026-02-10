@@ -26,7 +26,7 @@ TRAIN_ARGS=(
   --train_batch_size 1
   --train_guidance_scale 4.0
   --dataloader_num_workers 1
-  --learning_rate 1e-4
+  --learning_rate 5e-5
   --output_dir "${OUTPUT_DIR}"
   --t 1
   --sampling_steps 25
@@ -49,6 +49,6 @@ TRAIN_ARGS=(
 
 
 
-torchrun --nnodes=${WORLD_SIZE} --nproc_per_node=8 --node_rank=${RANK} --master_addr=${MASTER_ADDR} --master_port=8081 \
+torchrun --nnodes=4 --nproc_per_node=8 --node_rank=${RANK} --master_addr=${MASTER_ADDR} --master_port=8081 \
   fastvideo/train_flux2_klein.py \
   "${TRAIN_ARGS[@]}"
