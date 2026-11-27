@@ -32,16 +32,26 @@ Please leave us a star if you find this work helpful.
 
 - [2026/02] Support **Z-Image**, **FLUX.1-Kontext-dev**, **FLUX.2-Klein (T2I/I2I)**, **Qwen-Image-Edit** and **Wan2.2**.
 - [2026/02] Support [UnifiedReward-Flex](https://codegoat24.github.io/UnifiedReward/flex)-based Pref-GRPO for both image and video generation.
-- [2026/01] **Tongyi Lab** improves Pref-GRPO on open-ended agents in [ArenaRL: Scaling RL for Open-Ended Agents via Tournament-based Relative Ranking](https://arxiv.org/pdf/2601.06487). Thanks to all contributors!
 <details>
 <summary><strong>More News</strong></summary>
 
 - [2025/11] Support **Qwen-Image**, **Wan2.1** and **FLUX.1-dev**.
 - [2025/11] **Nano Banana Pro**, **FLUX.2-dev** and **Z-Image** are added to all Leaderboards.
-- [2025/10] **Alibaba Group** proves the effectiveness of Pref-GRPO on aligning LLMs in [Taming the Judge: Deconflicting AI Feedback for Stable Reinforcement Learning](https://arxiv.org/pdf/2510.15514). Thanks to all contributors!
 - [2025/9] **Seedream-4.0**, **GPT-4o**, **Imagen-4-Ultra**, **Nano Banana**, **Lumina-DiMOO**, **OneCAT**, **Echo-4o**, **OmniGen2**, and **Infinity** are added to all Leaderboards.
 - [2025/8] Release [Leaderboard (**English**)](https://huggingface.co/spaces/CodeGoat24/UniGenBench_Leaderboard), [Leaderboard (**English Long**)](https://huggingface.co/spaces/CodeGoat24/UniGenBench_Leaderboard_English_Long), [Leaderboard (**Chinese Long**)](https://huggingface.co/spaces/CodeGoat24/UniGenBench_Leaderboard_Chinese_Long) and [Leaderboard (**Chinese**)](https://huggingface.co/spaces/CodeGoat24/UniGenBench_Leaderboard_Chinese).
 </details>
+
+### 😊 **Awesome Works using Pref-GRPO**
+
+- **Shanghai AI Lab, CUHK** | [ETCHR: Editing To Clarify and Harness Reasoning](https://arxiv.org/abs/2605.23897)
+- **HKU, Alibaba** | [AesRM: Improving Video Aesthetics with Expert-Level Feedback](https://arxiv.org/abs/2604.28078)
+- **ByteDance, THU, CUHK** | [AgenticGen: Reward-Guided Agentic Video Generation for Advertising](https://arxiv.org/abs/2609.09187)
+- **Kuaishou Kolors, THU, ZJU** | [GCPO: Principled RL for Flow Matching Emerges from the Chunk-level Policy Optimization](https://proceedings.mlr.press/v306/luo26u.html) (ICML 2026)
+- **Tongyi** | [ArenaRL](https://arxiv.org/abs/2601.06487) and [ArenaFlow](https://arxiv.org/abs/2609.21378) [![GitHub stars](https://img.shields.io/github/stars/Alibaba-NLP/qqr)](https://github.com/Alibaba-NLP/qqr)
+- **Huawei Noah's Ark Lab, USTC** | [RAP-Walk: When Pairwise Preferences Cycle](https://arxiv.org/abs/2610.20089)
+- **KIST** | [CMO: Correlation-Weighted Multi-Reward Optimization for Compositional Generation](https://arxiv.org/abs/2603.18528) (ECCV 2026)
+- **Alibaba, CASIA** | [Voting with the Graph: Stable RLAIF via Topological Consistency Maximization](https://arxiv.org/abs/2510.15514)
+- **PKU** | [HIPPO: To Reason or to Fabricate](https://arxiv.org/abs/2606.29481)
 
 
 
